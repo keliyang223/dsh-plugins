@@ -1,0 +1,16 @@
+README.md
+  h_6ee620acf9166c 1-11
+dsh-file-to-chat
+  h_6ee620acf9166c 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "88cfed3b9f98c51d9b9f23ef7f77283a1e954184",
+  "prompts": {},
+  "humans": {
+    "h_6ee620acf9166c": {
+      "author": "keliyang <keliyang@zuoyebang.com>"
+    }
+  }
+}
