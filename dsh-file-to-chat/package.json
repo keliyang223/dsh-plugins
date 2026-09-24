@@ -1,0 +1,33 @@
+{
+  "name": "dsh-file-to-chat",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Insert file, directory, and selected line references into the DeepSeek Harness conversation draft",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keliyang223/dsh-file-to-chat.git"
+  },
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib/index.js", "lib/client.js", "cordis.patch.yml"],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-sidebar-documentpreview"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "node --check lib/index.js && node --check lib/client.js",
+    "test": "node --test test/*.test.mjs"
+  }
+}

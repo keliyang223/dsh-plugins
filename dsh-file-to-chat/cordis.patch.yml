@@ -1,0 +1,4 @@
+# Add one browser-only plugin entry to the Web profile.
+- insert:
+    - id: ui-file-to-chat
+      name: dsh-file-to-chat
