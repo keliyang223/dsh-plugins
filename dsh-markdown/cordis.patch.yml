@@ -1,0 +1,4 @@
+# Add the browser-only Markdown TOC plugin to the Web profile.
+- insert:
+    - id: ui-markdown-toc
+      name: dsh-markdown

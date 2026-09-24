@@ -1,0 +1,4 @@
+# The package's dsh.client manifest automatically loads its browser half.
+- insert:
+    - id: file-write-host
+      name: dsh-file-write

@@ -1,0 +1,36 @@
+{
+  "name": "dsh-file-write",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Edit, create, and delete workspace files from the DeepSeek Harness Web sidebar",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib/index.js", "lib/client.js", "cordis.patch.yml"],
+  "dependencies": {
+    "@deepseek-ai/dsh-typert-protocol": "0.1.7-rc.1"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-api-gateway",
+        "@deepseek-ai/dsh-api-workspace-files",
+        "@deepseek-ai/dsh-client-ui-sidebar-documentpreview",
+        "@deepseek-ai/dsh-client-ui-sidebar-files",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "node --check lib/index.js && node --check lib/client.js",
+    "test": "node --test test/*.test.mjs"
+  }
+}

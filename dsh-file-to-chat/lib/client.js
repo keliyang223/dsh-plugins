@@ -7,14 +7,14 @@ window.__ModuleLoader__.load({
     const { createPortal } = require('react-dom')
     const module = { exports: {} }
 
-    // The built-in @file grammar rejects control characters and quotes;
-    // whitespace paths must use @"...". Never append a line suffix to the path.
-    function mentionForFile(path, kind = 'file') {
+    // Insert a plain path (not an @file reference) into the conversation.
+    // Never append a line suffix to the path itself.
+    function pathForFile(path, kind = 'file') {
       if (typeof path !== 'string' || path.length === 0) return undefined
       const normalized = path.replace(/\\/g, '/')
       const target = kind === 'directory' && !normalized.endsWith('/') ? `${normalized}/` : normalized
-      if (/[\u0000-\u001f\u007f-\u009f"]/u.test(target)) return undefined
-      return /\s/u.test(target) ? `@"${target}"` : `@${target}`
+      if (/[\u0000-\u001f\u007f-\u009f]/u.test(target)) return undefined
+      return target
     }
 
     // Selection must stay inside ONE text document body. Prefer the preview's
@@ -62,38 +62,13 @@ window.__ModuleLoader__.load({
       }
     }
 
-    async function copyText(text) {
-      try {
-        if (window.navigator?.clipboard?.writeText) {
-          await window.navigator.clipboard.writeText(text)
-          return true
-        }
-      } catch { /* try the legacy clipboard path */ }
-
-      let input
-      try {
-        input = document.createElement('textarea')
-        input.value = text
-        input.setAttribute('readonly', '')
-        input.style.position = 'fixed'
-        input.style.opacity = '0'
-        document.body.appendChild(input)
-        input.select()
-        return !!document.execCommand?.('copy')
-      } catch {
-        return false
-      } finally {
-        input?.remove()
-      }
-    }
-
     function lineText(lines) {
       return lines ? ` 第 ${lines.start}${lines.end === lines.start ? '' : `–${lines.end}`} 行` : ''
     }
 
     function AddFileToChat({ absolutePath, inputActions }) {
       const pendingLines = useRef(null)
-      const mention = mentionForFile(absolutePath)
+      const mention = pathForFile(absolutePath)
       const label = mention === undefined ? '文件路径无法安全引用' : '引用文件或选中行到对话'
       return h('button', {
         type: 'button',
@@ -162,12 +137,12 @@ window.__ModuleLoader__.load({
           let label = '加入到对话框'
           let target = row
           if (inTree && (kind === 'file' || kind === 'directory')) {
-            mention = mentionForFile(row.getAttribute('data-files-path'), kind)
+            mention = pathForFile(row.getAttribute('data-files-path'), kind)
           } else if (preview) {
             lines = selectedLines(preview)
             if (lines === null) return // Do not replace the ordinary text context menu.
             const button = preview.querySelector('[data-file-to-chat-path]')
-            mention = mentionForFile(button?.getAttribute('data-file-to-chat-path'))
+            mention = pathForFile(button?.getAttribute('data-file-to-chat-path'))
             label = '引用选中行到对话框'
             target = preview
           }
@@ -178,13 +153,21 @@ window.__ModuleLoader__.load({
           const x = event.clientX || rect.left
           const y = event.clientY || rect.bottom
           const reference = `${mention}${lineText(lines)}`
+          const items = [{
+            label: lines ? '加入选中行到对话框' : label,
+            action: 'insert',
+            text: `${reference} `,
+          }]
+          // Let independent plugins contribute to the same file-tree menu.
+          // A separate contextmenu handler would race this capture listener.
+          if (inTree && window.CustomEvent && document.dispatchEvent) {
+            document.dispatchEvent(new window.CustomEvent('dsh-file-tree-menu', {
+              detail: { event, row, kind, items },
+            }))
+          }
           setMenu({
             label: lines ? '加入选中行到对话框' : label,
-            items: [{
-              label: lines ? '加入选中行到对话框' : label,
-              action: 'insert',
-              text: `${reference} `,
-            }],
+            items,
             span: inputActions.captureInsertion(),
             x: Math.max(8, Math.min(x, window.innerWidth - 220)),
             y: Math.max(8, Math.min(y, window.innerHeight - 78)),
@@ -240,7 +223,7 @@ window.__ModuleLoader__.load({
         'data-file-to-chat-menu-item': '',
         onMouseDown(event) { event.preventDefault() },
         async onClick() {
-          if (item.action === 'copy') await copyText(item.text)
+          if (typeof item.onClick === 'function') await item.onClick()
           else inputActions.insertText(item.text, menu.span)
           setMenu(null)
         },

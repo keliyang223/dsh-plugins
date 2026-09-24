@@ -1,0 +1,26 @@
+{
+  "name": "dsh-markdown",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Collapsible table of contents for Markdown previews in DeepSeek Harness Web",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib/index.js", "lib/client.js", "cordis.patch.yml"],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "inject": ["@deepseek-ai/dsh-client-ui-sidebar-documentpreview"],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "node --check lib/index.js && node --check lib/client.js",
+    "test": "node --test test/*.test.mjs"
+  }
+}
