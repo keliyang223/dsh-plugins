@@ -6,8 +6,7 @@ A plugin for DeepSeek Harness Web `0.1.7-rc.1` that edits text files in the righ
 
 ## Usage
 
-- Open a `.md` or `.markdown` file and keep the built-in **Markdown** mode selected to enter the rich editor directly. Select text or a paragraph and use **H1**, **H2**, bold, italic, code, or bullet-list controls. Changes save automatically about 600 ms after typing stops without moving the cursor. **返回预览** (Back to preview) refreshes the rendered view when you leave the editor; unsaved changes require confirmation and remain as a draft.
-- For other text files, choose **编辑源文件** (Edit source) in the viewer selector. Changes save automatically. Markdown retains this alternative editor view too.
+- Choose **编辑源文件** (Edit source) in the viewer selector to edit text files with automatic saving. `.md` and `.markdown` files use this source editor too.
 - Right-click a **directory** for **新建文件** (New file) or **删除文件** (Delete); provide one filename such as `a.md` to create. Right-click a **regular file** for Delete only. Empty tree space has no create/delete actions. Deleting a directory recursively removes all its contents, requires a confirmation dialog, and cannot be undone.
 - With `dsh-file-to-chat`, these actions join the existing context menu. The actions also work without that plugin.
 

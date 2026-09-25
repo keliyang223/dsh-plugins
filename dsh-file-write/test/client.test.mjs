@@ -111,7 +111,7 @@ function directoryEvent(path = '/work', kind = 'directory') {
   }
 }
 
-test('registers text editor without replacing builtin Markdown viewer', () => {
+test('registers the source editor for text files', () => {
   const client = loadClient({ workspaceFiles: { readBytes() {} } })
   assert.equal(client.registrations.length, 1)
   const definition = client.registrations[0]
@@ -119,12 +119,8 @@ test('registers text editor without replacing builtin Markdown viewer', () => {
   assert.deepEqual(Array.from(definition.extensions.slice(0, 3)), ['md', 'markdown', 'txt'])
   assert.equal(definition.loading, 'renderer')
   assert.equal(client.slots.has('sidebar.right.tab.document'), true)
-  assert.equal(client.slots.has('sidebar.right.tab.document.action'), true)
-  assert.equal(client.slotMetadata.get('sidebar.right.tab.document.action').key,
-    '@deepseek-ai/dsh-client-ui-sidebar-documentpreview/markdown')
+  assert.equal(client.slots.has('sidebar.right.tab.document.action'), false)
   assert.equal(client.slots.has('conversation.input.dock'), true)
-  const action = client.slots.get('sidebar.right.tab.document.action')({ content: { kind: 'text', text: '# x', eof: true } })
-  assert.ok(action)
 })
 
 test('reads a single byte snapshot and saves only its matching version', async () => {
@@ -305,36 +301,6 @@ test('incomplete byte reads never expose a saveable blank editor', async () => {
   assert.equal(all(view, is('button', 'data-file-write-save')).length, 0)
   assert.equal(client.timers, 0)
   assert.match(all(view, is('span', 'data-file-write-status'))[0].children[0], /不完整/)
-})
-
-test('Markdown mode opens an inline rich editor directly', async () => {
-  const bytes = new TextEncoder().encode('# before\n')
-  const workspaceFiles = { readBytes: async () => ({ ok: true, value: {
-    data: bytes, version: 'v1', absolutePath: '/work/a.md', bytes: bytes.length, offset: 0, eof: true,
-  } }) }
-  const client = loadClient({ workspaceFiles })
-  const wrapped = client.slots.get('sidebar.right.tab.document.action')({
-    content: { kind: 'text', text: '# before\n', pages: [], eof: true },
-  })
-  const action = wrapped.type
-  const props = { ...wrapped.props,
-    useTabInfo: () => ({ tab: { contentId: 'dsh-resource://file/session/s1/a.md', signal: new AbortController().signal } }),
-  }
-  let view = client.renderComponent(action, props)
-  view.effects[1]()
-  assert.equal(client.previewBody.children.length, 1)
-  view = client.renderComponent(action, props)
-  const inline = all(view.value, is('portal'))[0]
-  assert.ok(inline)
-  const editor = inline.child.type
-  let editorView = client.renderComponent(editor, inline.child.props)
-  editorView.effects[1]()
-  await new Promise(resolve => setImmediate(resolve))
-  editorView = client.renderComponent(editor, inline.child.props)
-  const rich = all(editorView.value, is('div', 'data-file-write-rich-editor'))[0]
-  assert.ok(rich)
-  assert.match(source, /data-file-write-markdown-toolbar/)
-  assert.equal(all(editorView.value, is('button', 'data-file-write-save')).length, 0)
 })
 
 test('bridges new-file menu item and calls exclusive create with chosen name', async () => {

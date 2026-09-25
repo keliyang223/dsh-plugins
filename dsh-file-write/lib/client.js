@@ -6,18 +6,7 @@ window.__ModuleLoader__.load({
     const { createPortal } = require('react-dom')
     const module = { exports: {} }
     const EDITOR_ID = 'dsh-file-write/editor'
-    const MARKDOWN_ID = '@deepseek-ai/dsh-client-ui-sidebar-documentpreview/markdown'
     const drafts = new Map()
-    const inlineMarkdown = new Map()
-    const inlineListeners = new Set()
-    const inlineKey = (sessionId, path) => JSON.stringify([sessionId, path])
-    function toggleMarkdown(sessionId, path) {
-      if (!sessionId || !path) return
-      const key = inlineKey(sessionId, path)
-      if (inlineMarkdown.has(key)) inlineMarkdown.delete(key)
-      else inlineMarkdown.set(key, true)
-      for (const listener of inlineListeners) listener()
-    }
     const editorStyle = {
       boxSizing: 'border-box', width: '100%', minHeight: 240, flex: '1 1 auto', resize: 'none',
       padding: 12, border: 0, outline: 'none', background: 'transparent', color: 'inherit',
@@ -42,56 +31,7 @@ window.__ModuleLoader__.load({
       if (result?.ok === false) throw result.error || new Error('操作失败')
       return result?.ok === true ? result.value : result
     }
-    function escapeHtml(text) {
-      return String(text).replace(/[&<>"']/gu, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char])
-    }
-    function markdownToHtml(text) {
-      const lines = String(text || '').split(/\r?\n/u)
-      return lines.map((line) => {
-        const heading = /^(#{1,6})\s+(.*)$/u.exec(line)
-        const body = heading ? heading[2] : line
-        const inline = escapeHtml(body)
-          .replace(/\[([^\]]+)\]\(([^)]+)\)/gu, '<a href="$2">$1</a>')
-          .replace(/`([^`]+)`/gu, '<code>$1</code>')
-          .replace(/\*\*([^*]+)\*\*/gu, '<strong>$1</strong>')
-          .replace(/__([^_]+)__/gu, '<strong>$1</strong>')
-          .replace(/\*([^*]+)\*/gu, '<em>$1</em>')
-          .replace(/_([^_]+)_/gu, '<em>$1</em>')
-        if (heading) return `<h${heading[1].length}>${inline}</h${heading[1].length}>`
-        return line ? `<p>${inline}</p>` : '<p><br></p>'
-      }).join('')
-    }
-    function htmlToMarkdown(root) {
-      function walk(node) {
-        if (node.nodeType === 3) return node.nodeValue.replace(/\u00a0/gu, ' ')
-        if (node.nodeType !== 1) return ''
-        const content = [...node.childNodes].map(walk).join('')
-        const tag = node.tagName.toLowerCase()
-        if (/^h[1-6]$/u.test(tag)) return `${'#'.repeat(Number(tag[1]))} ${content.trim()}\n\n`
-        if (tag === 'p' || tag === 'div') return `${content.trimEnd()}\n\n`
-        if (tag === 'br') return '\n'
-        if (tag === 'strong' || tag === 'b') return `**${content}**`
-        if (tag === 'em' || tag === 'i') return `*${content}*`
-        if (tag === 'code') return `\`${content}\``
-        if (tag === 'a') return `[${content}](${node.getAttribute('href') || ''})`
-        if (tag === 'li') return `- ${content.trim()}\n`
-        if (tag === 'ul' || tag === 'ol') return `${content}\n`
-        return content
-      }
-      return walk(root).replace(/\n{3,}/gu, '\n\n').trimEnd() + '\n'
-    }
-    function RichToolbar({ onCommand }) {
-      const controls = [
-        ['H1', 'formatBlock', 'h1'], ['H2', 'formatBlock', 'h2'], ['粗体', 'bold'],
-        ['斜体', 'italic'], ['代码', 'formatBlock', 'pre'], ['• 列表', 'insertUnorderedList'],
-      ]
-      return h('div', { 'data-file-write-markdown-toolbar': '', style: { display: 'flex', gap: 4, flexWrap: 'wrap' } },
-        controls.map(([label, command, value]) => h('button', {
-          key: label, type: 'button', style: buttonStyle, title: label,
-          onMouseDown: (event) => { event.preventDefault(); onCommand(command, value) },
-        }, label)))
-    }
-    function Editor({ resourceAddress, content, useResource, useTabInfo, fileWrite, workspaceFiles, inline = false, onExit }) {
+    function Editor({ resourceAddress, content, useResource, useTabInfo, fileWrite, workspaceFiles }) {
       const contentValue = content || { kind: 'text', text: '', pages: [], eof: true }
       const metadata = (typeof useResource === 'function' ? useResource(resourceAddress || undefined) : null) || { status: 'none', value: null }
       const tabInfo = typeof useTabInfo === 'function' ? useTabInfo() : { tab: {} }
@@ -117,8 +57,6 @@ window.__ModuleLoader__.load({
       const draftRef = useRef(draft)
       draftRef.current = draft
       const activeRef = useRef(true)
-      const richRef = useRef(null)
-      const richTextRef = useRef('')
       useEffect(() => {
         activeRef.current = true
         return () => { activeRef.current = false }
@@ -132,7 +70,7 @@ window.__ModuleLoader__.load({
       // preview's paged text and resource metadata are independent observations;
       // they MUST NOT be paired to form a CAS save token.
       useEffect(() => {
-        if ((!inline && contentValue.kind !== 'renderer') || !fileSession || !filePath || !workspaceFiles?.readBytes) {
+        if (contentValue.kind !== 'renderer' || !fileSession || !filePath || !workspaceFiles?.readBytes) {
           setLoading(false)
           setReadError('无法读取当前文件；请使用工作区文件树打开并重试。')
           return
@@ -178,10 +116,10 @@ window.__ModuleLoader__.load({
           if (controller.signal.aborted || safeSignal.aborted) return
           setReadError(failureMessage(error))
           setLoading(false)
-          if (content.kind === 'renderer') content.failed()
+          if (contentValue.kind === 'renderer') contentValue.failed()
         })
         return () => controller.abort()
-      }, [revision, effectiveAddress, fileSession, filePath, workspaceFiles, safeSignal, inline, contentValue.kind])
+      }, [revision, effectiveAddress, fileSession, filePath, workspaceFiles, safeSignal, contentValue.kind])
       // Resource observations are only a conflict signal; never a save token.
       // A metadata frame from before our initial byte read can be stale, so
       // only compare versions after seeing the matching version in the stream.
@@ -226,49 +164,20 @@ window.__ModuleLoader__.load({
         return () => clearTimeout(timer)
       }, [ready, dirty, draft?.text, draft?.version, draft?.saving, draft?.conflict, draft?.error,
         observedVersion, fileWrite, safeSignal])
-      useEffect(() => {
-        if (!inline || !richRef.current || !draft || document.activeElement === richRef.current) return
-        const html = markdownToHtml(draft.text)
-        if (richRef.current.innerHTML !== html) richRef.current.innerHTML = html
-        richTextRef.current = draft.text
-      }, [inline, draft?.text, ready])
-      function richCommand(command, value) {
-        richRef.current?.focus()
-        document.execCommand(command, false, value)
-        if (richRef.current) {
-          const text = htmlToMarkdown(richRef.current)
-          richTextRef.current = text
-          const current = draftRef.current
-          if (current && ready) update({ ...current, text, error: current.conflict ? current.error : '' })
-        }
-      }
       return h('section', {
         'data-file-write-editor': '', style: {
           display: 'flex', flexDirection: 'column', minHeight: 280, height: '100%', color: 'var(--dsw-alias-label-primary, #222)',
         },
       },
       h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', flexWrap: 'wrap' } },
-        h('strong', { style: { fontSize: 12 } }, inline ? '编辑 Markdown' : '编辑源文件'),
+        h('strong', { style: { fontSize: 12 } }, '编辑源文件'),
         h('span', { 'data-file-write-status': '', role: 'status', style: { fontSize: 12, flex: 1 } },
           readError || (!ready ? '正在完整读取文件…' : draft?.conflict ? '版本冲突' : draft?.saving ? '正在保存…' : draft?.error ? '保存失败' : dirty ? '等待自动保存…' : '已保存')),
-        inline && h(RichToolbar, { onCommand: richCommand }),
-        inline && h('button', { type: 'button', style: buttonStyle, onClick: () => {
-          if (dirty && !window.confirm('修改尚未保存，返回预览后草稿会暂存。确认返回？')) return
-          if (onExit) onExit()
-          else toggleMarkdown(fileSession, filePath)
-        }, 'data-file-write-markdown-close': '' }, '返回预览')),
+      ),
       draft?.error && h('p', { role: 'alert', style: { color: '#c44', margin: '0 12px 8px' } }, draft.error),
       draft?.conflict && h('p', { style: { margin: '0 12px 8px', fontSize: 12 } },
         '草稿仍在编辑框中。请复制草稿，然后使用上方预览工具栏的重新加载按钮；不会强制覆盖远端文件。'),
-      inline ? h('div', {
-        ref: richRef, role: 'textbox', contentEditable: ready, suppressContentEditableWarning: true,
-        'aria-label': '编辑 Markdown 内容', 'data-file-write-rich-editor': '',
-        style: { ...editorStyle, whiteSpace: 'normal', overflowY: 'auto', padding: 16, font: '14px/1.7 var(--dsw-font-family, sans-serif)' },
-        onInput(event) {
-          const current = draftRef.current
-          if (current && ready) update({ ...current, text: htmlToMarkdown(event.currentTarget), error: current.conflict ? current.error : '' })
-        },
-      }) : h('textarea', {
+      h('textarea', {
         'aria-label': '编辑文件内容', 'data-file-write-textarea': '', spellCheck: false,
         style: editorStyle, disabled: !ready,
         value: draft?.text || '',
@@ -277,59 +186,6 @@ window.__ModuleLoader__.load({
           if (current && ready) update({ ...current, text: event.target.value, error: current.conflict ? current.error : '' })
         },
       }))
-    }
-
-    function MarkdownInlineAction({ useTabInfo, content, fileWrite, workspaceFiles }) {
-      const tabInfo = typeof useTabInfo === 'function' ? useTabInfo() : { tab: {} }
-      const { tab = {} } = tabInfo || {}
-      const [enabled, setEnabled] = useState(true)
-      const [host, setHost] = useState(null)
-      const hostRef = useRef(null)
-      const address = tab?.contentId || tab?.resourceAddress
-      const match = typeof address === 'string' && /^dsh-resource:\/\/file\/session\/([^/]+)\/(.+)/u.exec(address)
-      let sessionId = null
-      let path = null
-      try {
-        if (match) {
-          sessionId = decodeURIComponent(match[1])
-          path = match[2].split('/').map(decodeURIComponent).join('/')
-        }
-      } catch { /* Invalid resource addresses are not writable. */ }
-      const key = inlineKey(sessionId, path)
-      useEffect(() => {
-        setEnabled(true)
-      }, [key])
-      useEffect(() => {
-        if (!enabled || !address) return
-        const preview = Array.from(document.querySelectorAll('[data-textpreview-url]'))
-          .find((node) => node.getAttribute('data-textpreview-url') === address)
-        const body = preview?.querySelector('[data-textpreview-body]')
-        if (!body) return
-        const overlay = document.createElement('div')
-        overlay.setAttribute('data-file-write-markdown-overlay', '')
-        overlay.style.cssText = 'position:sticky;top:0;left:0;width:100%;height:100%;min-height:280px;z-index:2;background:var(--dsw-alias-bg-layer-2,#fff);overflow:auto;'
-        const previous = body.style.position
-        body.style.position = 'relative'
-        body.appendChild(overlay)
-        body.scrollTop = 0
-        hostRef.current = overlay
-        setHost(overlay)
-        return () => {
-          hostRef.current = null
-          overlay.remove()
-          body.style.position = previous
-        }
-      }, [enabled, address])
-      function leaveEditor() {
-        toggleMarkdown(sessionId, path)
-        const preview = Array.from(document.querySelectorAll('[data-textpreview-url]'))
-          .find((node) => node.getAttribute('data-textpreview-url') === address)
-        preview?.querySelector('[data-textpreview-tool="reload"]')?.click()
-      }
-      if (!match || !sessionId || !path || !['text', 'renderer'].includes(content?.kind)) return null
-      return enabled && host && hostRef.current === host && createPortal(h(Editor, { resourceAddress: address,
-        content, useResource: () => ({ status: 'none', value: null }), useTabInfo,
-        fileWrite, workspaceFiles, inline: true, onExit: leaveEditor }), host)
     }
 
     function treeTarget(event) {
@@ -530,21 +386,6 @@ window.__ModuleLoader__.load({
         name: 'sidebar.right.tab.document', key: id,
       }, (props) => h(Editor, { ...props, key: props.resourceAddress, fileWrite,
         workspaceFiles: ctx.remote.workspaceFiles })))
-      ctx.slots.inject('sidebar.right.tab.document.action', () => {
-        const register = (key, priority) => {
-          try {
-            const dispose = ctx.slots.register({
-              name: 'sidebar.right.tab.document.action', key, priority,
-            }, (props) => h(MarkdownInlineAction, { ...props, fileWrite,
-              workspaceFiles: ctx.remote.workspaceFiles }))
-            return dispose
-          } catch (error) {
-            console.warn('[dsh-file-write] Markdown action registration unavailable', error)
-            return () => {}
-          }
-        }
-        return register(MARKDOWN_ID, 1)
-      })
       ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
         name: 'conversation.input.dock', id: 'dsh-file-write-tree-create',
       }, (props) => h(FileTreeCreate, { ...props, fileWrite })))
