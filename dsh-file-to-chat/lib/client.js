@@ -17,107 +17,136 @@ window.__ModuleLoader__.load({
       return target
     }
 
-    // Selection must stay inside ONE text document body. Prefer the preview's
-    // absolute line markers; fall back to line breaks for other text renderers.
+    // Rendered Markdown and some text viewers do not expose source positions.
+    // Match the selected text against the original file instead of counting
+    // visual DOM lines, which can include hidden Markdown syntax.
+    function normalizeSourceText(value) {
+      return value
+        .replace(/!?(\[)([^\]]+)\]\([^)]*\)/gu, '$2')
+        .replace(/(`+)(.*?)\1/gu, '$2')
+        .replace(/[*_~]/gu, '')
+        .replace(/<[^>]+>/gu, '')
+        .replace(/\\([\\`*_[\](){}/>#+.!-])/gu, '$1')
+        .replace(/\s+/gu, ' ')
+        .trim()
+    }
+
+    async function sourceLinesForSelection(preview, range) {
+      const pathNode = preview.querySelector('[data-textpreview-path]')
+      const path = pathNode?.getAttribute('title') || pathNode?.textContent?.trim()
+      const selectedText = normalizeSourceText(range.toString().replace(/\r\n/gu, '\n'))
+      if (!path || !selectedText || typeof fetch !== 'function') return null
+      try {
+        const url = new URL(`api/file?path=${encodeURIComponent(path)}`, document.baseURI)
+        const response = await fetch(url.href)
+        if (!response.ok) return null
+        const sourceLines = (await response.text()).split(/\r?\n/u)
+        const normalized = sourceLines.map(normalizeSourceText)
+        for (let start = 0; start < normalized.length; start++) {
+          let joined = ''
+          for (let end = start; end < normalized.length && end < start + 32; end++) {
+            joined = normalizeSourceText(`${joined} ${normalized[end]}`)
+            if (joined === selectedText) return { start: start + 1, end: end + 1 }
+            if (joined.length > selectedText.length + 128) break
+          }
+          if (normalized[start] && normalized[start].includes(selectedText)) return { start: start + 1, end: start + 1 }
+        }
+      } catch (_) {}
+      return null
+    }
+
+    async function sourceLinesForMarkdownCode(preview, code, range) {
+      const pathNode = preview.querySelector('[data-textpreview-path]')
+      const path = pathNode?.getAttribute('title') || pathNode?.textContent?.trim()
+      const rendered = code.querySelector('pre')?.textContent?.replace(/\r\n/gu, '\n')
+      const selectedText = range.toString().replace(/\r\n/gu, '\n').trim()
+      if (!path || !rendered || !selectedText) return null
+      const renderedLines = rendered.replace(/\n$/u, '').split('\n')
+      const selectedLines = selectedText.split('\n').map((line) => line.trim())
+      let selectedOffset = -1
+      for (let i = 0; i <= renderedLines.length - selectedLines.length; i++) {
+        if (selectedLines.every((line, offset) => renderedLines[i + offset].trim() === line)) {
+          selectedOffset = i
+          break
+        }
+      }
+      if (selectedOffset < 0) return null
+      try {
+        const url = new URL(`api/file?path=${encodeURIComponent(path)}`, document.baseURI)
+        const response = await fetch(url.href)
+        if (!response.ok) return null
+        const lines = (await response.text()).split(/\r?\n/u)
+        const matches = []
+        for (let i = 0; i < lines.length; i++) {
+          const open = /^( {0,3})(`{3,}|~{3,})[^\n]*$/u.exec(lines[i])
+          if (!open) continue
+          const close = new RegExp(`^ {0,3}${open[2][0]}{${open[2].length},}\\s*$`, 'u')
+          let end = i + 1
+          while (end < lines.length && !close.test(lines[end])) end++
+          if (end < lines.length) {
+            const body = lines.slice(i + 1, end).map((line) => line.slice(open[1].length).trim())
+            if (body.length === renderedLines.length && body.every((line, index) => line === renderedLines[index].trim())) matches.push(i + 2)
+          }
+          i = end
+        }
+        return matches.length === 1 ? { start: matches[0] + selectedOffset, end: matches[0] + selectedOffset + selectedLines.length - 1 } : null
+      } catch (_) {
+        return null
+      }
+    }
+
     function selectedLines(preview, selection = window.getSelection?.()) {
       const body = preview?.querySelector('[data-textpreview-body]')
       if (!body || !selection || selection.isCollapsed || selection.rangeCount === 0) return null
       const range = selection.getRangeAt(0)
       if (!body.contains(range.startContainer) || !body.contains(range.endContainer)) return null
-
-      const plainLines = [...body.querySelectorAll('[data-textpreview-line]')]
-      const markedLines = plainLines.length ? [] : [...body.querySelectorAll('[data-code-line], [data-line-number]')]
-      const code = plainLines.length === 0 && markedLines.length === 0
-        ? body.querySelector('[data-code-preview] [data-code-block-content]')
-        : null
-      const codeLines = [...(code?.querySelectorAll('.line') ?? [])]
-      const lineNodes = plainLines.length ? plainLines : markedLines.length ? markedLines : codeLines
-      let start = Infinity
-      let end = 0
-      lineNodes.forEach((node, index) => {
-        if (!range.intersectsNode(node)) return
-        const explicit = node.getAttribute('data-textpreview-line')
-          ?? node.getAttribute('data-code-line')
-          ?? node.getAttribute('data-line-number')
-        const number = explicit === null ? index + 1 : Number(explicit)
-        if (Number.isSafeInteger(number) && number > 0) {
-          start = Math.min(start, number)
-          end = Math.max(end, number)
+      const lineNumber = (node) => {
+        for (const name of ['data-textpreview-line', 'data-source-line', 'data-line', 'data-code-line', 'data-line-number']) {
+          const value = Number(node.getAttribute?.(name))
+          if (Number.isSafeInteger(value) && value > 0) return value
         }
-      })
-      if (end) return { start, end }
-
-      // Some text renderers expose selectable text without per-line elements.
-      // Count source newlines before and inside the selection in that case.
+        return null
+      }
+      const selectedRange = (nodes) => {
+        let start = Infinity
+        let end = 0
+        nodes.forEach((node) => {
+          if (!range.intersectsNode(node)) return
+          const number = lineNumber(node)
+          if (number !== null) { start = Math.min(start, number); end = Math.max(end, number) }
+        })
+        return end ? { start, end } : null
+      }
+      const markdown = body.querySelector('[data-document-markdown]')
+      if (markdown) {
+        const code = [...markdown.querySelectorAll('[data-code-block-content]')]
+          .find((node) => node.contains(range.startContainer) || node.contains(range.endContainer) || range.intersectsNode(node))
+        // Markdown prose has no line metadata; map its selected text to source.
+        return code ? sourceLinesForMarkdownCode(preview, code, range) : sourceLinesForSelection(preview, range)
+      }
+      const code = body.querySelector('[data-code-preview] [data-code-block-content]')
+      const codeNodes = [...(code?.querySelectorAll('.line') ?? [])]
+      if (codeNodes.some((node) => range.intersectsNode(node))) {
+        const selected = codeNodes.flatMap((node, index) => range.intersectsNode(node) ? [index + 1] : [])
+        return { start: selected[0], end: selected[selected.length - 1] }
+      }
+      const plainSelection = selectedRange([...body.querySelectorAll('[data-textpreview-line]')])
+      if (plainSelection) return plainSelection
       try {
         const prefix = document.createRange()
         prefix.selectNodeContents(body)
         prefix.setEnd(range.startContainer, range.startOffset)
-        const startLine = prefix.toString().split('\n').length
         const selectedText = range.toString()
-        const endLine = (prefix.toString() + selectedText).split('\n').length
-        return selectedText.length ? { start: startLine, end: Math.max(startLine, endLine) } : null
+        const start = prefix.toString().split('\n').length
+        const end = (prefix.toString() + selectedText).split('\n').length
+        return selectedText ? { start, end: Math.max(start, end) } : null
       } catch {
-        return null
+        return sourceLinesForSelection(preview, range)
       }
     }
 
     function lineText(lines) {
       return lines ? ` 第 ${lines.start}${lines.end === lines.start ? '' : `–${lines.end}`} 行` : ''
-    }
-
-    function AddFileToChat({ absolutePath, inputActions }) {
-      const pendingLines = useRef(null)
-      const mention = pathForFile(absolutePath)
-      const label = mention === undefined ? '文件路径无法安全引用' : '引用文件或选中行到对话'
-      return h('button', {
-        type: 'button',
-        title: label,
-        'aria-label': label,
-        'data-file-to-chat': '',
-        'data-file-to-chat-path': absolutePath,
-        disabled: mention === undefined,
-        // Capture BEFORE a toolbar click can collapse the browser text selection.
-        onMouseDown(event) {
-          pendingLines.current = selectedLines(event.currentTarget?.closest?.('[data-textpreview-url]'))
-          event.preventDefault()
-        },
-        onClick(event) {
-          if (mention === undefined) return
-          const preview = event?.currentTarget?.closest?.('[data-textpreview-url]')
-          const lines = selectedLines(preview) ?? pendingLines.current
-          pendingLines.current = null
-          const span = inputActions.captureInsertion()
-          // Insertion is guarded by the draft revision; never overwrite a newer draft.
-          inputActions.insertText(`${mention}${lineText(lines)} `, span)
-        },
-        style: {
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: 28,
-          height: 28,
-          padding: 4,
-          border: 0,
-          borderRadius: 6,
-          background: 'transparent',
-          color: 'var(--dsw-alias-label-secondary, currentColor)',
-          cursor: mention === undefined ? 'not-allowed' : 'pointer',
-        },
-      }, h('svg', {
-        width: 16,
-        height: 16,
-        viewBox: '0 0 24 24',
-        fill: 'none',
-        stroke: 'currentColor',
-        strokeWidth: 1.8,
-        strokeLinecap: 'round',
-        strokeLinejoin: 'round',
-        'aria-hidden': 'true',
-      },
-      h('path', { d: 'M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.72' }),
-      h('path', { d: 'M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.72-1.72' }),
-      ))
     }
 
     // FilesBody has no per-row action slot in rc.1. Delegate contextmenu from
@@ -126,51 +155,69 @@ window.__ModuleLoader__.load({
       const [menu, setMenu] = useState(null)
 
       useEffect(() => {
-        function onContextMenu(event) {
-          if (event.defaultPrevented) return
-          const row = event.target?.closest?.('li[data-files-entry][data-files-path]')
-          const kind = row?.getAttribute('data-files-entry')
-          const inTree = row?.closest('[data-files-state="tree"]')
-          const preview = event.target?.closest?.('[data-textpreview-url]')
-          let mention
-          let lines = null
-          let label = '加入到对话框'
-          let target = row
-          if (inTree && (kind === 'file' || kind === 'directory')) {
-            mention = pathForFile(row.getAttribute('data-files-path'), kind)
-          } else if (preview) {
-            lines = selectedLines(preview)
-            if (lines === null) return // Do not replace the ordinary text context menu.
-            const button = preview.querySelector('[data-file-to-chat-path]')
-            mention = pathForFile(button?.getAttribute('data-file-to-chat-path'))
-            label = '引用选中行到对话框'
-            target = preview
-          }
+        function showMenu(event, target, mention, lines, label, items = [{
+          label: lines ? '加入选中行到对话框' : label,
+          action: 'insert',
+          text: `${mention}${lineText(lines)} `,
+        }]) {
           if (mention === undefined) return
           event.preventDefault()
           event.stopPropagation()
           const rect = target.getBoundingClientRect()
           const x = event.clientX || rect.left
           const y = event.clientY || rect.bottom
-          const reference = `${mention}${lineText(lines)}`
-          const items = [{
-            label: lines ? '加入选中行到对话框' : label,
-            action: 'insert',
-            text: `${reference} `,
-          }]
-          // Let independent plugins contribute to the same file-tree menu.
-          // A separate contextmenu handler would race this capture listener.
-          if (inTree && window.CustomEvent && document.dispatchEvent) {
-            document.dispatchEvent(new window.CustomEvent('dsh-file-tree-menu', {
-              detail: { event, row, kind, items },
-            }))
-          }
           setMenu({
             label: lines ? '加入选中行到对话框' : label,
             items,
             span: inputActions.captureInsertion(),
             x: Math.max(8, Math.min(x, window.innerWidth - 220)),
             y: Math.max(8, Math.min(y, window.innerHeight - 78)),
+          })
+        }
+
+        function previewForTarget(target) {
+          const direct = target?.closest?.('[data-textpreview-url]')
+          if (direct) return direct
+          const body = target?.closest?.('[data-textpreview-body]')
+          return body?.closest?.('[data-textpreview-url]') ?? body?.parentElement ?? null
+        }
+
+        function selectionIsInside(preview) {
+          const selection = window.getSelection?.()
+          const body = preview?.querySelector('[data-textpreview-body]')
+          if (!body || !selection || selection.isCollapsed || selection.rangeCount === 0) return false
+          const range = selection.getRangeAt(0)
+          return body.contains(range.startContainer) && body.contains(range.endContainer)
+        }
+
+        function onContextMenu(event) {
+          if (event.defaultPrevented) return
+          const row = event.target?.closest?.('li[data-files-entry][data-files-path]')
+          const kind = row?.getAttribute('data-files-entry')
+          const inTree = row?.closest('[data-files-state="tree"]')
+          if (inTree && (kind === 'file' || kind === 'directory')) {
+            const mention = pathForFile(row.getAttribute('data-files-path'), kind)
+            if (mention === undefined) return
+            const items = [{ label: '加入到对话框', action: 'insert', text: `${mention} ` }]
+            if (window.CustomEvent && document.dispatchEvent) {
+              document.dispatchEvent(new window.CustomEvent('dsh-file-tree-menu', { detail: { event, row, kind, items } }))
+            }
+            showMenu(event, row, mention, null, '加入到对话框', items)
+            return
+          }
+
+          const preview = previewForTarget(event.target)
+          if (!preview) return
+          const titleNode = preview.querySelector('[data-textpreview-path]')
+          const mention = pathForFile(titleNode?.getAttribute('title') || titleNode?.textContent?.trim())
+          if (mention === undefined) return
+          if (!selectionIsInside(preview)) return
+          event.preventDefault()
+          event.stopPropagation()
+          // Source lookup is asynchronous. If exact mapping fails, keep the
+          // file action available without a misleading line suffix.
+          Promise.resolve(selectedLines(preview)).then((lines) => {
+            showMenu(event, preview, mention, lines, '加入到对话框')
           })
         }
         document.addEventListener('contextmenu', onContextMenu, true)
@@ -249,13 +296,6 @@ window.__ModuleLoader__.load({
 
     module.exports.inject = ['slots']
     module.exports.apply = function apply(ctx) {
-      // The slot declaration can arrive after this plugin: inject waits for it.
-      ctx.slots.inject('sidebar.right.tab.document.actions', () =>
-        ctx.slots.register({
-          name: 'sidebar.right.tab.document.actions',
-          id: 'dsh-file-to-chat',
-        }, AddFileToChat),
-      )
       ctx.slots.inject('conversation.input.dock', () =>
         ctx.slots.register({
           name: 'conversation.input.dock',

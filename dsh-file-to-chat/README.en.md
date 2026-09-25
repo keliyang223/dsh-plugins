@@ -16,7 +16,6 @@
   @/Users/me/project/src/app.ts 第 12–20 行
   ```
 
-- **Preview toolbar button:** Click the chain-link button in the preview header to insert the current file reference and the selected line range, if any.
 - **Draft-safe insertion:** Uses DSH's `inputActions.captureInsertion` and `insertText` APIs. It does not send the message or replace existing draft text.
 - **Paths with spaces:** Uses the quoted form required by DSH's `@file` syntax, such as `@"/Users/me/my project/a.ts"`.
 

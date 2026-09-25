@@ -8,9 +8,12 @@ const source = readFileSync(join(import.meta.dirname, '../lib/client.js'), 'utf8
 
 function loadClient({ workspaceFiles, call = async () => ({ ok: true, value: { absolutePath: '/work/a.md', version: 'v2' } }) } = {}) {
   const slots = new Map()
+  const slotMetadata = new Map()
   const listeners = new Map()
   const registrations = []
   const requests = []
+  const timers = new Map()
+  let nextTimer = 0
   const previewBody = {
     style: { position: '' }, scrollTop: 0, children: [],
     appendChild(child) { this.children.push(child) },
@@ -52,7 +55,10 @@ function loadClient({ workspaceFiles, call = async () => ({ ok: true, value: { a
     useEffect(fn) { index++; effects.push(fn) },
   }
   const window = { innerWidth: 800, innerHeight: 600, __ModuleLoader__: { load(entry) { window.entry = entry } } }
-  runInNewContext(source, { window, document, TextDecoder, Uint8Array, ArrayBuffer, AbortController, WeakSet, console })
+  runInNewContext(source, { window, document, TextDecoder, Uint8Array, ArrayBuffer, AbortController, WeakSet, console,
+    setTimeout: (fn, delay) => { assert.equal(delay, 600); const id = ++nextTimer; timers.set(id, fn); return id },
+    clearTimeout: (id) => timers.delete(id),
+  })
   const exports = window.entry.factory(name => name === 'react' ? react : { createPortal: child => ({ type: 'portal', child }) })
   const ctx = {
     documentPreviews: { register(def) { registrations.push(def); return () => {} } },
@@ -61,17 +67,26 @@ function loadClient({ workspaceFiles, call = async () => ({ ok: true, value: { a
     effect: fn => fn(),
     slots: {
       inject(_name, fn) { fn() },
-      register(meta, render) { slots.set(meta.name, render); return () => {} },
+      register(meta, render) { slots.set(meta.name, render); slotMetadata.set(meta.name, meta); return () => {} },
     },
   }
-  exports.apply(ctx)
+  exports.apply(new Proxy(ctx, {
+    get(target, property, receiver) {
+      if (property === 'remote' && !exports.inject.includes('remote')) {
+        throw new Error('cannot get property "remote" without inject')
+      }
+      return Reflect.get(target, property, receiver)
+    },
+  }))
   function renderComponent(component, props) {
     index = 0
     effects = []
     const value = component(props)
     return { value, effects: [...effects] }
   }
-  return { slots, registrations, requests, document, window, previewBody, get reloads() { return reloads }, renderComponent }
+  return { slots, slotMetadata, registrations, requests, document, window, previewBody,
+    flushTimers() { const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach(fn => fn()) },
+    get timers() { return timers.size }, get reloads() { return reloads }, renderComponent }
 }
 
 function all(node, predicate, out = []) {
@@ -105,6 +120,8 @@ test('registers text editor without replacing builtin Markdown viewer', () => {
   assert.equal(definition.loading, 'renderer')
   assert.equal(client.slots.has('sidebar.right.tab.document'), true)
   assert.equal(client.slots.has('sidebar.right.tab.document.action'), true)
+  assert.equal(client.slotMetadata.get('sidebar.right.tab.document.action').key,
+    '@deepseek-ai/dsh-client-ui-sidebar-documentpreview/markdown')
   assert.equal(client.slots.has('conversation.input.dock'), true)
   const action = client.slots.get('sidebar.right.tab.document.action')({ content: { kind: 'text', text: '# x', eof: true } })
   assert.ok(action)
@@ -139,16 +156,134 @@ test('reads a single byte snapshot and saves only its matching version', async (
   assert.equal(textarea.props.value, '# before\n')
   textarea.props.onChange({ target: { value: '# after\n' } })
   view = client.renderComponent(editor, props)
-  const save = all(view.value, is('button', 'data-file-write-save'))[0]
-  assert.equal(save.props.disabled, false)
-  await save.props.onClick()
+  assert.equal(all(view.value, is('button', 'data-file-write-save')).length, 0)
+  assert.equal(client.requests.length, 0)
+  view.effects[3]() // Debounced automatic save.
+  assert.equal(client.timers, 1)
+  client.flushTimers()
+  await new Promise(resolve => setImmediate(resolve))
   assert.equal(client.requests.length, 1)
-  assert.equal(client.requests[0][1], 'fileWrite/save')
   assert.equal(client.requests[0][2].args.sessionId, 's1')
   assert.equal(client.requests[0][2].args.path, '/work/a.md')
   assert.equal(client.requests[0][2].args.expectedVersion, 'v1')
   assert.equal(client.requests[0][2].args.text, '# after\n')
 })
+
+test('autosave serializes edits and retains newer text typed during a pending save', async () => {
+  let resolveFirst
+  const client = loadClient({
+    workspaceFiles: { readBytes: async () => ({ ok: true, value: {
+      data: new TextEncoder().encode('a'), version: 'v1', absolutePath: '/work/a.md', bytes: 1, offset: 0, eof: true,
+    } }) },
+    call: (...args) => client.requests.length === 1
+      ? new Promise(resolve => { resolveFirst = resolve })
+      : { ok: true, value: { version: 'v3' } },
+  })
+  const wrapped = client.slots.get('sidebar.right.tab.document')({
+    resourceAddress: 'dsh-resource://file/session/s1/a.md',
+    content: { kind: 'renderer', revision: 1, loaded() {}, failed() {} },
+  })
+  const signal = new AbortController().signal
+  const props = { ...wrapped.props, useResource: () => ({ status: 'live', value: { version: 'v1' } }),
+    useTabInfo: () => ({ tab: { signal } }) }
+  let view = client.renderComponent(wrapped.type, props)
+  view.effects[1]()
+  await new Promise(resolve => setImmediate(resolve))
+  view = client.renderComponent(wrapped.type, props)
+  all(view.value, is('textarea'))[0].props.onChange({ target: { value: 'ab' } })
+  view = client.renderComponent(wrapped.type, props)
+  view.effects[3]()
+  client.flushTimers()
+
+  view = client.renderComponent(wrapped.type, props)
+  all(view.value, is('textarea'))[0].props.onChange({ target: { value: 'abc' } })
+  view = client.renderComponent(wrapped.type, props)
+  view.effects[3]()
+  assert.equal(client.timers, 0)
+  assert.equal(client.requests.length, 1)
+  resolveFirst({ ok: true, value: { version: 'v2' } })
+  await new Promise(resolve => setImmediate(resolve))
+  view = client.renderComponent(wrapped.type, props)
+  assert.equal(all(view.value, is('textarea'))[0].props.value, 'abc')
+  view.effects[3]()
+  client.flushTimers()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(client.requests.map(request => [request[2].args.text, request[2].args.expectedVersion]),
+    [['ab', 'v1'], ['abc', 'v2']])
+  view = client.renderComponent(wrapped.type, props)
+  assert.equal(all(view.value, is('span', 'data-file-write-status'))[0].children[0], '已保存')
+})
+
+test('failed autosave preserves draft without retrying until the next edit', async () => {
+  const client = loadClient({
+    workspaceFiles: { readBytes: async () => ({ ok: true, value: {
+      data: new TextEncoder().encode('a'), version: 'v1', absolutePath: '/work/a.md', bytes: 1, offset: 0, eof: true,
+    } }) },
+    call: async () => ({ ok: false, error: { code: 'file-write/unavailable', message: '写入失败' } }),
+  })
+  const wrapped = client.slots.get('sidebar.right.tab.document')({
+    resourceAddress: 'dsh-resource://file/session/s1/a.md',
+    content: { kind: 'renderer', revision: 1, loaded() {}, failed() {} },
+  })
+  const props = { ...wrapped.props, useResource: () => ({ status: 'live', value: { version: 'v1' } }),
+    useTabInfo: () => ({ tab: { signal: new AbortController().signal } }) }
+  let view = client.renderComponent(wrapped.type, props)
+  view.effects[1]()
+  await new Promise(resolve => setImmediate(resolve))
+  view = client.renderComponent(wrapped.type, props)
+  all(view.value, is('textarea'))[0].props.onChange({ target: { value: 'ab' } })
+  view = client.renderComponent(wrapped.type, props)
+  view.effects[3]()
+  client.flushTimers()
+
+  await new Promise(resolve => setImmediate(resolve))
+  view = client.renderComponent(wrapped.type, props)
+  view.effects[3]()
+  assert.equal(client.timers, 0)
+  assert.equal(client.requests.length, 1)
+  assert.equal(all(view.value, is('textarea'))[0].props.value, 'ab')
+  assert.equal(all(view.value, is('span', 'data-file-write-status'))[0].children[0], '保存失败')
+  all(view.value, is('textarea'))[0].props.onChange({ target: { value: 'abc' } })
+  view = client.renderComponent(wrapped.type, props)
+  view.effects[3]()
+  assert.equal(client.timers, 1)
+})
+
+
+test('background renderer reload leaves an initialized editor active', async () => {
+  let resolveRefresh
+  let reads = 0
+  const client = loadClient({ workspaceFiles: { readBytes: () => ++reads === 1
+    ? Promise.resolve({ ok: true, value: {
+      data: new TextEncoder().encode('a'), version: 'v1', absolutePath: '/work/a.md', bytes: 1, offset: 0, eof: true,
+    } })
+    : new Promise(resolve => { resolveRefresh = resolve }),
+  } })
+  const wrapped = client.slots.get('sidebar.right.tab.document')({
+    resourceAddress: 'dsh-resource://file/session/s1/a.md',
+    content: { kind: 'renderer', revision: 1, loaded() {}, failed() {} },
+  })
+  const props = { ...wrapped.props, useResource: () => ({ status: 'live', value: { version: 'v1' } }),
+    useTabInfo: () => ({ tab: { signal: new AbortController().signal } }) }
+  let view = client.renderComponent(wrapped.type, props)
+  view.effects[1]()
+  await new Promise(resolve => setImmediate(resolve))
+  view = client.renderComponent(wrapped.type, props)
+  assert.equal(all(view.value, is('textarea'))[0].props.disabled, false)
+  const refreshed = { ...props, content: { kind: 'renderer', revision: 2, loaded() {}, failed() {} } }
+  view = client.renderComponent(wrapped.type, refreshed)
+  view.effects[1]()
+  await Promise.resolve()
+  assert.equal(typeof resolveRefresh, 'function')
+  view = client.renderComponent(wrapped.type, refreshed)
+  assert.equal(all(view.value, is('textarea'))[0].props.disabled, false)
+  assert.equal(all(view.value, is('textarea'))[0].props.value, 'a')
+  resolveRefresh({ ok: true, value: {
+    data: new TextEncoder().encode('a'), version: 'v1', absolutePath: '/work/a.md', bytes: 1, offset: 0, eof: true,
+  } })
+  await new Promise(resolve => setImmediate(resolve))
+})
+
 
 test('incomplete byte reads never expose a saveable blank editor', async () => {
   const client = loadClient({ workspaceFiles: { readBytes: async () => ({ ok: true, value: {
@@ -167,28 +302,25 @@ test('incomplete byte reads never expose a saveable blank editor', async () => {
   await new Promise(resolve => setImmediate(resolve))
   const view = client.renderComponent(wrapped.type, props).value
   assert.equal(all(view, is('textarea'))[0].props.disabled, true)
-  assert.equal(all(view, is('button', 'data-file-write-save'))[0].props.disabled, true)
+  assert.equal(all(view, is('button', 'data-file-write-save')).length, 0)
+  assert.equal(client.timers, 0)
   assert.match(all(view, is('span', 'data-file-write-status'))[0].children[0], /不完整/)
 })
 
-test('Markdown mode opens an inline editor without replacing its rendered body', async () => {
+test('Markdown mode opens an inline rich editor directly', async () => {
   const bytes = new TextEncoder().encode('# before\n')
   const workspaceFiles = { readBytes: async () => ({ ok: true, value: {
     data: bytes, version: 'v1', absolutePath: '/work/a.md', bytes: bytes.length, offset: 0, eof: true,
   } }) }
   const client = loadClient({ workspaceFiles })
   const wrapped = client.slots.get('sidebar.right.tab.document.action')({
-    content: { kind: 'text', text: '# before\n', eof: true },
+    content: { kind: 'text', text: '# before\n', pages: [], eof: true },
   })
   const action = wrapped.type
   const props = { ...wrapped.props,
     useTabInfo: () => ({ tab: { contentId: 'dsh-resource://file/session/s1/a.md', signal: new AbortController().signal } }),
   }
   let view = client.renderComponent(action, props)
-  assert.equal(all(view.value, is('button', 'data-file-write-markdown-toggle'))[0].children[0], '编辑 Markdown')
-  view.effects[0]()
-  all(view.value, is('button', 'data-file-write-markdown-toggle'))[0].props.onClick()
-  view = client.renderComponent(action, props)
   view.effects[1]()
   assert.equal(client.previewBody.children.length, 1)
   view = client.renderComponent(action, props)
@@ -199,13 +331,10 @@ test('Markdown mode opens an inline editor without replacing its rendered body',
   editorView.effects[1]()
   await new Promise(resolve => setImmediate(resolve))
   editorView = client.renderComponent(editor, inline.child.props)
-  assert.equal(all(editorView.value, is('textarea'))[0].props.value, '# before\n')
-  all(editorView.value, is('textarea'))[0].props.onChange({ target: { value: '# updated\n' } })
-  editorView = client.renderComponent(editor, inline.child.props)
-  await all(editorView.value, is('button', 'data-file-write-save'))[0].props.onClick()
-  assert.equal(client.requests[0][1], 'fileWrite/save')
-  assert.equal(client.requests[0][2].args.expectedVersion, 'v1')
-  assert.equal(client.reloads, 1)
+  const rich = all(editorView.value, is('div', 'data-file-write-rich-editor'))[0]
+  assert.ok(rich)
+  assert.match(source, /data-file-write-markdown-toolbar/)
+  assert.equal(all(editorView.value, is('button', 'data-file-write-save')).length, 0)
 })
 
 test('bridges new-file menu item and calls exclusive create with chosen name', async () => {

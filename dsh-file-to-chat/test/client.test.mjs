@@ -26,6 +26,7 @@ function loadPlugin(options = {}) {
     __ModuleLoader__: { load: (entry) => { loaded = entry } },
   }
   const document = {
+    baseURI: 'http://127.0.0.1:3080/',
     body: { appendChild() {} },
     createRange: options.createRange,
     createElement: options.createElement,
@@ -44,57 +45,19 @@ function loadPlugin(options = {}) {
   assert.equal(Array.from(plugin.inject).join(','), 'slots')
   plugin.apply({ slots: {
     inject(key, callback) {
-      assert.ok(['sidebar.right.tab.document.actions', 'conversation.input.dock'].includes(key))
+      assert.equal(key, 'conversation.input.dock')
       callback()
     },
     register(meta, render) {
-      assert.equal(meta.name, meta.id === 'dsh-file-to-chat' ? 'sidebar.right.tab.document.actions' : 'conversation.input.dock')
+      assert.equal(meta.name, 'conversation.input.dock')
       components.set(meta.name, render)
       return () => {}
     },
   } })
-  assert.equal(components.size, 2)
+  assert.equal(components.size, 1)
+  assert.equal(components.has('sidebar.right.tab.document.actions'), false)
   return { components, window, document }
 }
-
-function loadButton(path, actions) {
-  const { components } = loadPlugin()
-  return components.get('sidebar.right.tab.document.actions')({ absolutePath: path, inputActions: actions })
-}
-
-for (const [path, expected] of [
-  ['C:\\work\\src\\app.ts', 'C:/work/src/app.ts '],
-  ['C:\\my work\\src\\app.ts', 'C:/my work/src/app.ts '],
-  ['/home/me/file.ts', '/home/me/file.ts '],
-]) {
-  test(`inserts ${expected} without submitting`, () => {
-    const span = { start: 3, end: 3, draftRev: 2 }
-    const calls = []
-    const button = loadButton(path, {
-      captureInsertion() { calls.push('capture'); return span },
-      insertText(text, captured) { calls.push(['insert', text, captured]); return true },
-    })
-    assert.equal(button.type, 'button')
-    assert.equal(button.props.disabled, false)
-    let prevented = false
-    button.props.onMouseDown({ preventDefault() { prevented = true } })
-    button.props.onClick()
-    assert.equal(prevented, true)
-    assert.equal(calls[0], 'capture')
-    assert.deepEqual(calls[1], ['insert', expected, span])
-  })
-}
-
-test('refuses empty paths and paths containing control characters', () => {
-  for (const path of ['/tmp/line\nbreak.ts', '']) {
-    const button = loadButton(path, {
-      captureInsertion() { throw Error('not called') },
-      insertText() { throw Error('not called') },
-    })
-    assert.equal(button.props.disabled, true)
-    button.props.onClick()
-  }
-})
 
 test('right-click on a file row inserts its path but does not open the file', () => {
   let menu = null
@@ -273,9 +236,8 @@ function previewSelection(kind, selected, path = 'C:\\my work\\src\\main.go') {
     querySelector: (selector) => selector === '[data-code-preview] [data-code-block-content]' && kind === 'code' ? code : null,
   }
   const preview = {
-    querySelector: (selector) => selector === '[data-textpreview-body]' ? body : {
-      getAttribute: () => path,
-    },
+    querySelector: (selector) => selector === '[data-textpreview-body]' ? body :
+      selector === '[data-textpreview-path]' ? { getAttribute: (attribute) => attribute === 'title' ? path : null } : null,
     getBoundingClientRect: () => ({ left: 20, bottom: 50 }),
   }
   const selection = {
@@ -290,30 +252,12 @@ function previewSelection(kind, selected, path = 'C:\\my work\\src\\main.go') {
   return { preview, selection, body }
 }
 
-test('toolbar preserves selected plain-text source lines through its click', () => {
-  const calls = []
-  const span = { draftRev: 5 }
-  const { preview, selection } = previewSelection('plain', [2, 3, 4])
-  let currentSelection = selection
-  const { components } = loadPlugin({ getSelection: () => currentSelection })
-  const render = components.get('sidebar.right.tab.document.actions')
-  const button = render({
-    absolutePath: 'C:\\my work\\src\\main.go',
-    inputActions: {
-      captureInsertion: () => span,
-      insertText: (text, captured) => { calls.push([text, captured]); return true },
-    },
-  })
-  let prevented = false
-  const currentTarget = { closest: () => preview }
-  button.props.onMouseDown({ currentTarget, preventDefault: () => { prevented = true } })
-  currentSelection = null // Browser could drop selection when the toolbar is clicked.
-  button.props.onClick({ currentTarget })
-  assert.equal(prevented, true)
-  assert.deepEqual(calls[0], ['C:/my work/src/main.go 第 12–14 行 ', span])
+test('preview toolbar no longer registers an add-to-chat button', () => {
+  const { components } = loadPlugin()
+  assert.equal(components.has('sidebar.right.tab.document.actions'), false)
 })
 
-test('right-click on selected code lines offers one action to insert the selected-line reference', () => {
+test('right-click on selected code lines offers one action to insert the selected-line reference', async () => {
   let menu = null
   const effects = []
   const listeners = new Map()
@@ -341,6 +285,7 @@ test('right-click on selected code lines offers one action to insert the selecte
     stopPropagation: () => {},
   })
   assert.equal(prevented, true)
+  await Promise.resolve()
   const portal = render({ inputActions })
   assert.equal(portal.child.children.length, 1)
   const item = portal.child.children[0]
@@ -349,7 +294,7 @@ test('right-click on selected code lines offers one action to insert the selecte
   assert.deepEqual(calls[0], ['C:/my work/src/main.go 第 2–3 行 ', span])
 })
 
-test('generic text preview falls back to counting selected lines and offers insertion', () => {
+test('generic text preview falls back to counting selected lines and offers insertion', async () => {
   let menu = null
   const effects = []
   const listeners = new Map()
@@ -379,6 +324,7 @@ test('generic text preview falls back to counting selected lines and offers inse
     preventDefault() {},
     stopPropagation() {},
   })
+  await Promise.resolve()
   const portal = render({ inputActions })
   assert.equal(portal.child.children.length, 1)
   const item = portal.child.children[0]
@@ -387,20 +333,25 @@ test('generic text preview falls back to counting selected lines and offers inse
   assert.deepEqual(calls, ['/tmp/sample.txt 第 2–3 行 '])
 })
 
-test('selection from outside the preview does not add stale line numbers', () => {
+test('selection from outside the preview does not open the reference menu', () => {
+  let menu = null
+  const effects = []
+  const listeners = new Map()
   const { preview, selection, body } = previewSelection('plain', [2, 3])
   body.contains = () => false
-  const calls = []
-  const { components } = loadPlugin({ getSelection: () => selection })
-  const button = components.get('sidebar.right.tab.document.actions')({
-    absolutePath: 'C:\\repo\\a.go',
-    inputActions: {
-      captureInsertion: () => ({}),
-      insertText: (text) => { calls.push(text); return true },
-    },
+  const { components } = loadPlugin({
+    getSelection: () => selection,
+    useState: () => [menu, (value) => { menu = value }],
+    useEffect: (effect) => { effects.push(effect) },
+    addDocumentListener: (name, handler) => { listeners.set(name, handler) },
   })
-  button.props.onClick({ currentTarget: { closest: () => preview } })
-  assert.deepEqual(calls, ['C:/repo/a.go '])
+  components.get('conversation.input.dock')({ inputActions: { captureInsertion() { throw Error('unexpected') } } })
+  effects[0]()
+  listeners.get('contextmenu')({
+    target: { closest: (selector) => selector === '[data-textpreview-url]' ? preview : null },
+    preventDefault() { throw Error('unexpected') },
+  })
+  assert.equal(menu, null)
 })
 
 test('contains only a browser client entry and a no-op host entry', async () => {
