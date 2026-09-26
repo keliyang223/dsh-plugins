@@ -8,6 +8,12 @@
 | **dsh-file-write** | 在右侧预览编辑并保存 Markdown 等文本文件；在文件树右键创建或删除文件及目录，支持版本冲突防护。 | [插件 README](dsh-file-write/README.md) · [English](dsh-file-write/README.en.md) |
 | **dsh-markdown** | 为 Markdown 预览添加可折叠目录，自动扫描标题，点击目录项可滚动到对应标题，并记住目录显示状态。 | [README](dsh-markdown/README.md) |
 
+## 使用案例：将目录加入对话
+
+在 DSH Web 的文件树中右键目标目录，选择“加入到对话框”，插件会把目录路径插入当前对话草稿。图中将 `mdview` 目录加入草稿后，可继续补充问题，再自行发送给 AI。
+
+![dsh-file-to-chat 将目录路径加入对话草稿的示例](file-to-chat-case.png)
+
 ## 安装
 
 各插件的安装、使用、限制与卸载说明见对应 README。
