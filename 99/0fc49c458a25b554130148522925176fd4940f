@@ -1,0 +1,16 @@
+dsh-markdown/lib/client.js
+  h_6ee620acf9166c 85-87
+dsh-markdown/test/client.test.mjs
+  h_6ee620acf9166c 237-269
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "990fc49c458a25b554130148522925176fd4940f",
+  "prompts": {},
+  "humans": {
+    "h_6ee620acf9166c": {
+      "author": "keliyang <keliyang@zuoyebang.com>"
+    }
+  }
+}
