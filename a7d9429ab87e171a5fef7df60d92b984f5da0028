@@ -1,0 +1,24 @@
+dsh-file-write/README.en.md
+  h_6ee620acf9166c 5,10,23
+dsh-file-write/README.md
+  h_6ee620acf9166c 5,10,23
+dsh-file-write/lib/client.js
+  h_6ee620acf9166c 203,217,219,236,249,272-275,281-283,285,329-331,338,341-343,379-382
+dsh-file-write/lib/index.js
+  h_6ee620acf9166c 3,117-152,230
+dsh-file-write/test/client.test.mjs
+  h_6ee620acf9166c 314,330-349,382-383
+dsh-file-write/test/host.test.mjs
+  h_6ee620acf9166c 100,106,128-179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a7d9429ab87e171a5fef7df60d92b984f5da0028",
+  "prompts": {},
+  "humans": {
+    "h_6ee620acf9166c": {
+      "author": "keliyang <keliyang@zuoyebang.com>"
+    }
+  }
+}

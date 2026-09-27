@@ -1,0 +1,28 @@
+README.md
+  h_6ee620acf9166c 1-11
+dsh-file-to-chat/README.en.md
+  h_6ee620acf9166c 1-88
+dsh-file-to-chat/README.md
+  h_6ee620acf9166c 1-25
+dsh-file-to-chat/cordis.patch.yml
+  h_6ee620acf9166c 1-4
+dsh-file-to-chat/lib/client.js
+  h_6ee620acf9166c 1-285
+dsh-file-to-chat/lib/index.js
+  h_6ee620acf9166c 1-3
+dsh-file-to-chat/package.json
+  h_6ee620acf9166c 1-33
+dsh-file-to-chat/test/client.test.mjs
+  h_6ee620acf9166c 1-373
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7ad1c2e832a323516ff014be839d9e9899f5b5f3",
+  "prompts": {},
+  "humans": {
+    "h_6ee620acf9166c": {
+      "author": "keliyang <keliyang@zuoyebang.com>"
+    }
+  }
+}

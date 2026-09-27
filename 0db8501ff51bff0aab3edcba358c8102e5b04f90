@@ -1,0 +1,52 @@
+README.md
+  h_6ee620acf9166c 8
+dsh-file-to-chat/lib/client.js
+  h_6ee620acf9166c 10-12,16-17,71,140,145,156-167,170,226
+dsh-file-to-chat/test/client.test.mjs
+  h_6ee620acf9166c 22,33,66-68,88-89,150,155-192,210,216,255,313,349,387,403
+dsh-file-write/.gitignore
+  h_6ee620acf9166c 1
+dsh-file-write/README.en.md
+  h_6ee620acf9166c 1-37
+dsh-file-write/README.md
+  h_6ee620acf9166c 1-37
+dsh-file-write/cordis.patch.yml
+  h_6ee620acf9166c 1-4
+dsh-file-write/lib/client.js
+  h_6ee620acf9166c 1-482
+dsh-file-write/lib/index.js
+  h_6ee620acf9166c 1-201
+dsh-file-write/package.json
+  h_6ee620acf9166c 1-36
+dsh-file-write/pnpm-lock.yaml
+  h_6ee620acf9166c 1-63
+dsh-file-write/pnpm-workspace.yaml
+  h_6ee620acf9166c 1-3
+dsh-file-write/test/client.test.mjs
+  h_6ee620acf9166c 1-273
+dsh-file-write/test/host.test.mjs
+  h_6ee620acf9166c 1-227
+dsh-markdown/README.md
+  h_6ee620acf9166c 1-27
+dsh-markdown/cordis.patch.yml
+  h_6ee620acf9166c 1-4
+dsh-markdown/lib/client.js
+  h_6ee620acf9166c 1-214
+dsh-markdown/lib/index.js
+  h_6ee620acf9166c 1-3
+dsh-markdown/package.json
+  h_6ee620acf9166c 1-26
+dsh-markdown/test/client.test.mjs
+  h_6ee620acf9166c 1-111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0db8501ff51bff0aab3edcba358c8102e5b04f90",
+  "prompts": {},
+  "humans": {
+    "h_6ee620acf9166c": {
+      "author": "keliyang <keliyang@zuoyebang.com>"
+    }
+  }
+}
