@@ -234,6 +234,39 @@ test('highlights the reading section and shows whole-document scroll progress', 
   hooks.cleanup()
 })
 
+test('last heading stays selectable when the document ends before it reaches the reading marker', () => {
+  const hooks = mockHooks()
+  const first = heading('English', 1)
+  const last = heading('Installation', 2)
+  first.getBoundingClientRect = () => ({ top: -350 })
+  last.getBoundingClientRect = () => ({ top: 160 }) // below the 80px marker even at EOF
+  const { preview, body } = markdownPreview([first, last])
+  const listeners = new Map()
+  body.scrollHeight = 1000
+  body.clientHeight = 200
+  body.scrollTop = 799
+  body.getBoundingClientRect = () => ({ top: 0 })
+  body.addEventListener = (name, handler) => listeners.set(name, handler)
+  body.removeEventListener = (name) => listeners.delete(name)
+  const { components } = loadPlugin(hooks)
+  const [, action] = [...components][0]
+  hooks.states[2] = preview
+  hooks.render(action, { absolutePath: '/tmp/README.md' })
+  hooks.runEffects()
+  const nav = () => renderTree(hooks.render(action, { absolutePath: '/tmp/README.md' }).children[1].child).children[2]
+  assert.equal(nav().children[1].props['aria-current'], 'location')
+  body.scrollTop = 700
+  listeners.get('scroll')()
+  assert.equal(nav().children[0].props['aria-current'], 'location')
+  assert.equal(nav().children[1].props['aria-current'], undefined)
+  nav().children[1].props.onClick()
+  assert.equal(last.scrolled, true)
+  body.scrollTop = 800
+  listeners.get('scroll')()
+  assert.equal(nav().children[1].props['aria-current'], 'location')
+  hooks.cleanup()
+})
+
 test('drags the divider across small and large widths, clamps it, persists and restores it', () => {
   const hooks = mockHooks()
   const writes = []

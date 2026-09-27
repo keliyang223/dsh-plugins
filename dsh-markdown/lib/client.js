@@ -82,6 +82,9 @@ window.__ModuleLoader__.load({
         if (items[i].node.getBoundingClientRect().top <= marker) active = i
         else break
       }
+      // The final heading may never reach the reading marker: the scrollport
+      // stops at the document's end first. Still make its TOC entry current.
+      if (max > 0 && top >= max - 1 && items.length) active = items.length - 1
       return { active, progress: max ? Math.round(Math.min(1, top / max) * 100) : 100 }
     }
 
