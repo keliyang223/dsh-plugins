@@ -4,7 +4,7 @@
 
 **DSH File to Chat** is a browser-side plugin for DeepSeek Harness (DSH) Web. It inserts references to local files, folders, or selected line ranges from text-file previews into the current conversation draft. The AI can then use the Harness file tools to inspect the referenced context when the user sends a prompt.
 
-> **Privacy and behavior:** The plugin inserts reference text only. It does not submit messages or independently read, copy, or upload referenced file contents. Any later file access depends on the user's prompt and tool execution.
+> **Privacy and behavior:** The plugin inserts reference text only and does not submit messages or upload file contents. For Markdown previews, it reads the opened file in the background into browser memory to map rendered blocks to source lines; right-click itself never starts a read. Any later AI file access depends on the user's prompt and tool execution.
 
 ## Features
 
@@ -61,8 +61,8 @@ Example:
 ## Line numbers and supported content
 
 - A selection must be wholly contained in the body of one file preview.
-- The plugin prefers absolute source line markers provided by the text preview. For other renderers, it uses explicit line elements when available; if no line markers exist, it counts newline characters in the preview text.
-- In paginated previews, only currently loaded and displayed lines can be referenced. The plugin cannot infer line numbers across content that has not been loaded.
+- For Markdown, the plugin preloads the opened source in the background and keeps a cache per preview. Right-click resolves against that cache synchronously; it does not wait for a request. If still loading, too large, ambiguous, or unsupported, it inserts only the file path without guessing line numbers. A successful Markdown citation covers the selected block's source lines, not necessarily only the selected words.
+- For other text renderers, it prefers explicit line markers; without markers it counts newline characters in preview text. In paginated previews, only currently loaded and displayed lines can be referenced.
 - Paths that cannot be safely represented by DSH's `@file` syntax (for example, paths containing control characters or a double quote) are not inserted.
 - A line range is plain text appended to the `@path` reference. It is not a structured attachment and does not force the AI to read only those lines; the AI still needs to use a file tool to inspect the file.
 - The plugin observes DSH file-tree and preview DOM markers. A future DSH UI change to those markers may require a compatibility update.

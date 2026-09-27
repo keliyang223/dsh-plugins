@@ -312,6 +312,7 @@ test('bridges new-file menu item and calls exclusive create with chosen name', a
   const items = [{ label: '加入到对话框' }]
   client.document.dispatchEvent({ type: 'dsh-file-tree-menu', detail: { event, items } })
   assert.deepEqual(items.map(item => item.label), ['加入到对话框', '新建文件', '新建文件夹', '删除文件'])
+  assert.deepEqual(items.slice(1).map(item => item.icon), ['createFile', 'createDirectory', 'delete'])
   items[1].onClick()
   view = client.renderComponent(wrapped.type, wrapped.props)
   const input = all(view.value, is('input', 'data-file-write-name'))[0]

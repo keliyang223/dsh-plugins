@@ -14,6 +14,18 @@
 
 ![dsh-file-to-chat 将目录路径加入对话草稿的示例](file-to-chat-case.png)
 
+## 使用案例：Markdown 预览目录
+
+打开 Markdown 文件预览，点击右上角“目录”，即可在右侧查看当前文档的标题列表；点击标题可跳转到对应位置。
+
+![dsh-markdown 在 Markdown 预览右侧显示可折叠目录的示例](markdown-case.jpg)
+
+## 使用案例：文件树右键管理文件
+
+在文件树中右键文件夹，`dsh-file-write` 会提供“新建文件”“新建文件夹”和“删除文件”操作。截图还显示了同时安装 `dsh-file-to-chat` 时的“加入到对话框”选项；删除前会再次确认。
+
+![dsh-file-write 在文件夹右键菜单中提供新建文件、新建文件夹和删除操作的示例](file-write-case.jpg)
+
 ## 安装
 
 各插件的安装、使用、限制与卸载说明见对应 README。

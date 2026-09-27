@@ -10,6 +10,12 @@ A plugin for DeepSeek Harness Web `0.1.7-rc.1` that edits text files in the righ
 - Right-click a **directory** for **新建文件** (New file), **新建文件夹** (New folder), or **删除文件** (Delete); provide a single filename or folder name. Right-click a **regular file** for Delete only. Empty tree space has no create/delete actions. Deleting a directory recursively removes all its contents, requires a confirmation dialog, and cannot be undone.
 - With `dsh-file-to-chat`, these actions join the existing context menu. The actions also work without that plugin.
 
+## Example: folder context menu
+
+Right-click a folder in the file tree to create a file or folder, or delete the selected entry. The **加入到对话框** (Add to chat) option in this screenshot is provided by the separately installed `dsh-file-to-chat` plugin.
+
+![Folder context menu with New file, New folder, and Delete actions](../file-write-case.jpg)
+
 ## Install
 
 ```sh

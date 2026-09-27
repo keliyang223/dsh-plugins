@@ -18,6 +18,25 @@ window.__ModuleLoader__.load({
       border: '1px solid var(--dsw-alias-border-l1, #ccc)',
       background: 'var(--dsw-alias-bg-layer-2, #fff)', color: 'inherit',
     }
+    const menuButtonStyle = {
+      boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 8,
+      width: '100%', padding: '5px 8px', textAlign: 'left',
+      background: 'transparent', color: 'inherit', border: 0, borderRadius: 4,
+      cursor: 'pointer', font: 'inherit',
+    }
+    function menuIcon(kind) {
+      const path = {
+        createFile: 'M6 3h8l4 4v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm8 0v5h4M11 12v6m-3-3h6',
+        createDirectory: 'M3 7V5a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v2M3 7h18l-1.5 12a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2L3 7Zm9 4v6m-3-3h6',
+        delete: 'M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v6m4-6v6',
+      }[kind]
+      return h('svg', {
+        'aria-hidden': true, viewBox: '0 0 24 24', width: 16, height: 16,
+        fill: 'none', stroke: 'currentColor', strokeWidth: 1.7,
+        strokeLinecap: 'round', strokeLinejoin: 'round',
+        style: { flex: '0 0 16px', color: 'var(--dsw-alias-label-secondary, #666)' },
+      }, h('path', { d: path }))
+    }
 
     function failureMessage(error) {
       const code = error?.code
@@ -232,11 +251,11 @@ window.__ModuleLoader__.load({
           if (!target || !Array.isArray(detail.items)) return
           bridgeSeen.current.add(detail.event)
           if (target.kind === 'directory') {
-            detail.items.push({ label: '新建文件', onClick: () => openCreate(target.path) })
-            detail.items.push({ label: '新建文件夹', onClick: () => openCreate(target.path, 'directory') })
+            detail.items.push({ label: '新建文件', icon: 'createFile', onClick: () => openCreate(target.path) })
+            detail.items.push({ label: '新建文件夹', icon: 'createDirectory', onClick: () => openCreate(target.path, 'directory') })
           }
           if (target.kind === 'directory' || target.kind === 'file') {
-            detail.items.push({ label: '删除文件', onClick: () => openDelete(target) })
+            detail.items.push({ label: '删除文件', icon: 'delete', onClick: () => openDelete(target) })
           }
         }
         function onContextMenu(event) {
@@ -321,17 +340,18 @@ window.__ModuleLoader__.load({
         menu && createPortal(h('div', {
           role: 'menu', 'aria-label': '文件操作', 'data-file-write-menu': '',
           style: { position: 'fixed', zIndex: 2147483647, top: menu.y, left: menu.x,
-            padding: 4, background: 'var(--dsw-alias-bg-layer-2, #fff)', color: 'var(--dsw-alias-label-primary, #222)',
+            minWidth: 148, padding: 4, fontSize: 12, lineHeight: '16px',
+            background: 'var(--dsw-alias-bg-layer-2, #fff)', color: 'var(--dsw-alias-label-primary, #222)',
             border: '1px solid var(--dsw-alias-border-l1, #ddd)', borderRadius: 6, boxShadow: '0 4px 12px #0003' },
         }, menu.target.kind === 'directory' && h('button', {
-          type: 'button', role: 'menuitem', autoFocus: true, style: buttonStyle,
-          onClick: () => openCreate(menu.target.path) }, '新建文件'),
+          type: 'button', role: 'menuitem', autoFocus: true, style: menuButtonStyle,
+          onClick: () => openCreate(menu.target.path) }, menuIcon('createFile'), h('span', null, '新建文件')),
         menu.target.kind === 'directory' && h('button', {
-          type: 'button', role: 'menuitem', style: buttonStyle,
-          onClick: () => openCreate(menu.target.path, 'directory') }, '新建文件夹'),
+          type: 'button', role: 'menuitem', style: menuButtonStyle,
+          onClick: () => openCreate(menu.target.path, 'directory') }, menuIcon('createDirectory'), h('span', null, '新建文件夹')),
         (menu.target.kind === 'directory' || menu.target.kind === 'file') && h('button', {
-          type: 'button', role: 'menuitem', autoFocus: menu.target.kind === 'file', style: buttonStyle,
-          onClick: () => openDelete(menu.target) }, '删除文件')), document.body),
+          type: 'button', role: 'menuitem', autoFocus: menu.target.kind === 'file', style: menuButtonStyle,
+          onClick: () => openDelete(menu.target) }, menuIcon('delete'), h('span', null, '删除文件'))), document.body),
         dialog !== null && createPortal(h('div', {
           role: 'presentation', 'data-file-write-dialog': '',
           style: { position: 'fixed', inset: 0, zIndex: 2147483647, background: '#0008', display: 'grid', placeItems: 'center' },
