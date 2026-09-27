@@ -1,0 +1,22 @@
+README.en.md
+  h_6ee620acf9166c 1-87
+README.md
+  h_6ee620acf9166c 1,3,5,7,9-11,15,19,21,25
+lib/client.js
+  h_6ee620acf9166c 10-12,16-95,103-106,108-145,158-192,199-206,208-212,214,217-220,266,269,272-274,283,294
+pnpm-lock.yaml
+  h_6ee620acf9166c 1-9
+test/client.test.mjs
+  h_6ee620acf9166c 21-22,29-34,48,52,57-58,106-107,113,118-155,173,179,218,221,231-235,239-240,249,255-257,260,288,290,292,294,297-339,342-346,348-354
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "77af293e54167a10035a2253cd99b4452ca80c0b",
+  "prompts": {},
+  "humans": {
+    "h_6ee620acf9166c": {
+      "author": "keliyang <keliyang@zuoyebang.com>"
+    }
+  }
+}
