@@ -18,6 +18,14 @@ window.__ModuleLoader__.load({
       border: '1px solid var(--dsw-alias-border-l1, #ccc)',
       background: 'var(--dsw-alias-bg-layer-2, #fff)', color: 'inherit',
     }
+    const createButtonStyle = {
+      ...buttonStyle, border: '1px solid #2368dc', background: '#2368dc', color: '#fff',
+      fontWeight: 600,
+    }
+    const trashButtonStyle = {
+      ...buttonStyle, border: '1px solid #c83232', background: '#c83232', color: '#fff',
+      fontWeight: 600,
+    }
     const menuButtonStyle = {
       boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 8,
       width: '100%', padding: '5px 8px', textAlign: 'left',
@@ -255,7 +263,7 @@ window.__ModuleLoader__.load({
             detail.items.push({ label: '新建文件夹', icon: 'createDirectory', onClick: () => openCreate(target.path, 'directory') })
           }
           if (target.kind === 'directory' || target.kind === 'file') {
-            detail.items.push({ label: '删除文件', icon: 'delete', onClick: () => openDelete(target) })
+            detail.items.push({ label: '移到废纸篓', icon: 'delete', onClick: () => openDelete(target) })
           }
         }
         function onContextMenu(event) {
@@ -330,7 +338,7 @@ window.__ModuleLoader__.load({
           setDeleting(null)
           document.querySelector('[data-files-state="tree"] [data-files-reload]')?.click()
         } catch (failure) {
-          if (mounted.current && !controller.signal.aborted) setError(failure?.message || '删除失败，请重试。')
+          if (mounted.current && !controller.signal.aborted) setError(failure?.message || '移到废纸篓失败，原文件未自动删除。')
         } finally {
           if (mounted.current) setPending(false)
           if (abortRef.current === controller) abortRef.current = null
@@ -351,7 +359,7 @@ window.__ModuleLoader__.load({
           onClick: () => openCreate(menu.target.path, 'directory') }, menuIcon('createDirectory'), h('span', null, '新建文件夹')),
         (menu.target.kind === 'directory' || menu.target.kind === 'file') && h('button', {
           type: 'button', role: 'menuitem', autoFocus: menu.target.kind === 'file', style: menuButtonStyle,
-          onClick: () => openDelete(menu.target) }, menuIcon('delete'), h('span', null, '删除文件'))), document.body),
+          onClick: () => openDelete(menu.target) }, menuIcon('delete'), h('span', null, '移到废纸篓'))), document.body),
         dialog !== null && createPortal(h('div', {
           role: 'presentation', 'data-file-write-dialog': '',
           style: { position: 'fixed', inset: 0, zIndex: 2147483647, background: '#0008', display: 'grid', placeItems: 'center' },
@@ -367,23 +375,23 @@ window.__ModuleLoader__.load({
         h('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end' } },
           h('button', { type: 'button', style: buttonStyle, disabled: pending,
             onClick: () => setDialog(null) }, '取消'),
-          h('button', { type: 'submit', style: buttonStyle, disabled: pending || !basenameValid(name),
+          h('button', { type: 'submit', style: createButtonStyle, disabled: pending || !basenameValid(name),
             'data-file-write-create': '' }, pending ? '创建中…' : '创建')))), document.body),
         deleting && createPortal(h('div', {
           role: 'presentation', 'data-file-write-delete-dialog': '',
           style: { position: 'fixed', inset: 0, zIndex: 2147483647, background: '#0008', display: 'grid', placeItems: 'center' },
-        }, h('form', { role: 'dialog', 'aria-modal': 'true', 'aria-label': '确认删除', onSubmit: removeEntry,
+        }, h('form', { role: 'dialog', 'aria-modal': 'true', 'aria-label': '确认移到废纸篓', onSubmit: removeEntry,
           style: { display: 'flex', flexDirection: 'column', gap: 12, padding: 18, width: 'min(420px, 90vw)',
             background: 'var(--dsw-alias-bg-layer-2, #fff)', color: 'var(--dsw-alias-label-primary, #222)', borderRadius: 8 } },
-        h('strong', null, `确认删除${deleting.kind === 'directory' ? '目录' : '文件'}？`),
+        h('strong', null, `将${deleting.kind === 'directory' ? '目录' : '文件'}移到废纸篓？`),
         h('small', { style: { overflowWrap: 'anywhere' } }, deleting.path),
-        h('span', null, deleting.kind === 'directory' ? '将递归删除目录及其中所有内容，无法撤销。' : '删除后无法撤销。'),
+        h('span', null, deleting.kind === 'directory' ? '目录及其中所有内容将一起移入系统废纸篓（Windows 为回收站），可从中恢复。' : '文件将移入系统废纸篓（Windows 为回收站），可从中恢复。'),
         error && h('span', { role: 'alert', style: { color: '#c44' } }, error),
         h('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end' } },
           h('button', { type: 'button', style: buttonStyle, disabled: pending,
             onClick: () => setDeleting(null) }, '取消'),
-          h('button', { type: 'submit', style: buttonStyle, disabled: pending,
-            'data-file-write-delete': '' }, pending ? '删除中…' : '确认删除')))), document.body))
+          h('button', { type: 'submit', style: trashButtonStyle, disabled: pending,
+            'data-file-write-delete': '' }, pending ? '移动中…' : '移到废纸篓')))), document.body))
     }
 
     module.exports.inject = ['slots', 'documentPreviews', 'connection', 'remote', 'remote.workspaceFiles']

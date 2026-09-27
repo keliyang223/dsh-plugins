@@ -2,17 +2,17 @@
 
 [简体中文](README.md)
 
-A plugin for DeepSeek Harness Web `0.1.7-rc.1` that edits text files in the right-hand preview and creates files or folders, or deletes entries, from the workspace file tree.
+A plugin for DeepSeek Harness Web `0.1.7-rc.1` that edits text files in the right-hand preview and creates files or folders, or moves entries to the host OS Trash (Recycle Bin on Windows), from the workspace file tree.
 
 ## Usage
 
 - Choose **编辑源文件** (Edit source) in the viewer selector to edit text files with automatic saving. `.md` and `.markdown` files use this source editor too.
-- Right-click a **directory** for **新建文件** (New file), **新建文件夹** (New folder), or **删除文件** (Delete); provide a single filename or folder name. Right-click a **regular file** for Delete only. Empty tree space has no create/delete actions. Deleting a directory recursively removes all its contents, requires a confirmation dialog, and cannot be undone.
+- Right-click a **directory** for **新建文件** (New file), **新建文件夹** (New folder), or **移到废纸篓** (Move to Trash); provide a single filename or folder name. Right-click a **regular file** for Move to Trash only. Empty tree space has no such actions. Confirm before moving a file or folder; a folder moves together with all its contents and can be restored from macOS Trash or Windows Recycle Bin. A failed move never falls back to permanent deletion.
 - With `dsh-file-to-chat`, these actions join the existing context menu. The actions also work without that plugin.
 
 ## Example: folder context menu
 
-Right-click a folder in the file tree to create a file or folder, or delete the selected entry. The **加入到对话框** (Add to chat) option in this screenshot is provided by the separately installed `dsh-file-to-chat` plugin.
+Right-click a folder in the file tree to create a file or folder, or move it to Trash. This screenshot shows the older permanent-delete menu; the **加入到对话框** (Add to chat) option comes from the separately installed `dsh-file-to-chat` plugin.
 
 ![Folder context menu with New file, New folder, and Delete actions](../file-write-case.jpg)
 
@@ -30,7 +30,7 @@ Restart the current DSH Web process and refresh the page to load both the Host w
 - Creation uses a create-if-absent operation, never overwriting another file. Saving checks the version observed when the document was opened; external changes cause a conflict and retain the draft.
 - Only UTF-8 text without NUL bytes is supported, up to 2 MiB for both original and saved content. Large or binary files cannot be saved.
 - Editing requires a complete file and version. Changes save automatically after about 600 ms of inactivity. A write failure or version conflict retains the draft and stops retries until the next edit. Drafts only survive for the current page lifetime; confirm the status says saved or copy your draft before refreshing or closing. Conflicts are not auto-merged.
-- The Host checks the live session and workspace; read-only sessions cannot delete; workspace roots, symlinks, and out-of-workspace targets cannot be deleted. Deletion uses Node's local filesystem because DSH's filesystem interface lacks a delete primitive. Paths are rechecked just before removal, but a hostile concurrent ancestor-symlink swap remains a TOCTOU risk without fd-relative deletion. Do not use recursive deletion in environments with untrusted concurrent filesystem mutation.
+- The Host checks the live session and workspace; read-only sessions cannot move entries; workspace roots, symlinks, and out-of-workspace targets are rejected. The `trash` package moves entries to the host OS Trash/Recycle Bin using a local filesystem backend; failure never triggers permanent deletion. Paths are rechecked before the move and the original path is verified absent afterwards. A hostile concurrent ancestor-symlink swap still presents a TOCTOU risk. Avoid moving folders in environments with untrusted concurrent filesystem mutation. On Windows service accounts, items may enter the service account's Recycle Bin rather than the desktop user's.
 
 ## Development
 

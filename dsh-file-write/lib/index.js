@@ -1,6 +1,7 @@
 import { TextDecoder } from 'node:util';
 import { posix, win32 } from 'node:path';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, lstat } from 'node:fs/promises';
+import trash from 'trash';
 import { TypertRemoteService, Remote, RemoteError } from '@deepseek-ai/dsh-typert-protocol';
 
 // The 0.1.7-rc.1 Gateway discovers these public Remote markers in SRC mode.
@@ -189,10 +190,15 @@ export class FileWrite extends TypertRemoteService {
     }
   }
 
-  // The DSH FileSystem API has no delete primitive. This path is local-only:
-  // canonicalize again immediately before Node's rm; never use the caller's
-  // original path in the destructive syscall. As with DSH fs-sandbox writes,
-  // concurrent hostile ancestor symlink swaps remain a residual TOCTOU risk.
+  async moveToTrash(absolutePath) {
+    await trash(absolutePath, { glob: false });
+  }
+
+  // The DSH FileSystem API has no trash primitive. This path is local-only:
+  // canonicalize again immediately before moving to the OS trash; never pass
+  // the caller's original path to the trash library. Do not fall back to rm.
+  // As with DSH fs-sandbox writes, hostile concurrent ancestor symlink swaps
+  // remain a residual TOCTOU risk.
   async delete(fileWriteSession, path, kind, signal) {
     // processPathFromHostPath is present on DSH's local filesystem backend;
     // do not issue Node syscalls against a nonlocal/virtual fs implementation.
@@ -219,8 +225,23 @@ export class FileWrite extends TypertRemoteService {
       fail('file-write/stale-entry', 'file type changed during deletion', path);
     }
     signal?.throwIfAborted();
-    await rm(this.ctx.fs.processPath(fresh), { recursive: kind === 'directory', force: false });
-    return { absolutePath: this.ctx.fs.processPath(fresh), kind };
+    const absolutePath = this.ctx.fs.processPath(fresh);
+    // trash() silently ignores missing inputs, even with glob disabled. Check
+    // existence both before and after it returns so a no-op is not reported as
+    // success, and never turn trash failures into permanent deletion.
+    const before = await lstat(absolutePath);
+    if (kind === 'file' ? !before.isFile() : !before.isDirectory()) {
+      fail('file-write/stale-entry', 'file type changed during trash move', path);
+    }
+    signal?.throwIfAborted();
+    await this.moveToTrash(absolutePath);
+    try {
+      await lstat(absolutePath);
+    } catch (error) {
+      if (isFsCode(error, 'ENOENT')) return { absolutePath, kind };
+      throw error;
+    }
+    fail('file-write/trash-failed', 'file was not moved to the trash', path);
   }
 }
 

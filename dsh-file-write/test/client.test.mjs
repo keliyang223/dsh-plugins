@@ -311,7 +311,7 @@ test('bridges new-file menu item and calls exclusive create with chosen name', a
   const event = directoryEvent('/work/docs')
   const items = [{ label: '加入到对话框' }]
   client.document.dispatchEvent({ type: 'dsh-file-tree-menu', detail: { event, items } })
-  assert.deepEqual(items.map(item => item.label), ['加入到对话框', '新建文件', '新建文件夹', '删除文件'])
+  assert.deepEqual(items.map(item => item.label), ['加入到对话框', '新建文件', '新建文件夹', '移到废纸篓'])
   assert.deepEqual(items.slice(1).map(item => item.icon), ['createFile', 'createDirectory', 'delete'])
   items[1].onClick()
   view = client.renderComponent(wrapped.type, wrapped.props)
@@ -319,6 +319,10 @@ test('bridges new-file menu item and calls exclusive create with chosen name', a
   input.props.onChange({ target: { value: 'a.md' } })
   view = client.renderComponent(wrapped.type, wrapped.props)
   const form = all(view.value, is('form'))[0]
+  const createButton = all(form, is('button', 'data-file-write-create'))[0]
+  assert.equal(createButton.props.style.background, '#2368dc')
+  assert.equal(createButton.props.style.color, '#fff')
+  assert.equal(createButton.props.disabled, false)
   await form.props.onSubmit({ preventDefault() {} })
   assert.equal(client.requests.length, 1)
   assert.equal(client.requests[0][1], 'fileWrite/create')
@@ -348,7 +352,7 @@ test('directory menu creates a child folder through the dedicated endpoint', asy
   assert.equal(client.requests[0][2].args.basename, 'child')
 })
 
-test('ordinary file right-click offers delete only and confirms before requesting it', async () => {
+test('ordinary file right-click offers move to Trash and confirms before requesting it', async () => {
   const client = loadClient({ call: async () => ({ ok: true, value: { absolutePath: '/work/a.md', kind: 'file' } }) })
   const wrapped = client.slots.get('conversation.input.dock')({ session: { id: 's1' } })
   let view = client.renderComponent(wrapped.type, wrapped.props)
@@ -356,14 +360,19 @@ test('ordinary file right-click offers delete only and confirms before requestin
   const event = directoryEvent('/work/a.md', 'file')
   const items = [{ label: '加入到对话框' }]
   client.document.dispatchEvent({ type: 'dsh-file-tree-menu', detail: { event, items } })
-  assert.deepEqual(items.map(item => item.label), ['加入到对话框', '删除文件'])
+  assert.deepEqual(items.map(item => item.label), ['加入到对话框', '移到废纸篓'])
   assert.equal(client.requests.length, 0)
   items[1].onClick()
   view = client.renderComponent(wrapped.type, wrapped.props)
   assert.equal(client.requests.length, 0)
-  const dialog = all(view.value, is('form')).find(node => node.props['aria-label'] === '确认删除')
+  const dialog = all(view.value, is('form')).find(node => node.props['aria-label'] === '确认移到废纸篓')
   assert.ok(dialog)
   assert.equal(all(dialog, is('small'))[0].children[0], '/work/a.md')
+  const deleteButton = all(dialog, is('button', 'data-file-write-delete'))[0]
+  assert.equal(deleteButton.props.style.background, '#c83232')
+  assert.equal(deleteButton.props.style.color, '#fff')
+  assert.equal(deleteButton.children[0], '移到废纸篓')
+  assert.match(all(dialog, is('span'))[0].children[0], /移入系统废纸篓.*可从中恢复/)
   await dialog.props.onSubmit({ preventDefault() {} })
   assert.equal(client.requests[0][1], 'fileWrite/delete')
   assert.equal(client.requests[0][2].args.sessionId, 's1')
@@ -371,7 +380,7 @@ test('ordinary file right-click offers delete only and confirms before requestin
   assert.equal(client.requests[0][2].args.kind, 'file')
 })
 
-test('directory deletion warns about recursively removing all contents', async () => {
+test('moving a directory to Trash keeps its contents recoverable', async () => {
   const client = loadClient()
   const wrapped = client.slots.get('conversation.input.dock')({ session: { id: 's1' } })
   const view = client.renderComponent(wrapped.type, wrapped.props)
@@ -380,10 +389,10 @@ test('directory deletion warns about recursively removing all contents', async (
   client.document.dispatchEvent({ type: 'dsh-file-tree-menu', detail: {
     event: directoryEvent('/work/sub'), items,
   } })
-  assert.deepEqual(items.map(item => item.label), ['新建文件', '新建文件夹', '删除文件'])
+  assert.deepEqual(items.map(item => item.label), ['新建文件', '新建文件夹', '移到废纸篓'])
   items[2].onClick()
   const dialog = all(client.renderComponent(wrapped.type, wrapped.props).value, is('form'))
-    .find(node => node.props['aria-label'] === '确认删除')
-  assert.match(all(dialog, is('span'))[0].children[0], /递归删除目录/)
+    .find(node => node.props['aria-label'] === '确认移到废纸篓')
+  assert.match(all(dialog, is('span'))[0].children[0], /目录及其中所有内容将一起移入系统废纸篓.*可从中恢复/)
   assert.equal(client.requests.length, 0)
 })

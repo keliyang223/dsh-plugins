@@ -214,7 +214,7 @@ test('danger-full-access sessions still use the workspace-only filesystem fence'
   await rejectsCode(owner.create(scope, '/outside', 'escape.txt', 'x'), 'file-write/outside-workspace');
 });
 
-test('deletion confines regular files and recursively removes confirmed directories', async () => {
+test('trash move confines files and folders and never moves outside-workspace entries', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-file-write-test-'));
   const work = join(root, 'work');
   const outside = join(root, 'outside');
@@ -253,6 +253,12 @@ test('deletion confines regular files and recursively removes confirmed director
       sandboxPolicy: { resolve: () => ({ mode: 'workspace-write', workspaceRoot: work }) },
     };
     const scope = { session: { id: 's1', header: { cwd: work } } };
+    const trashed = [];
+    owner.moveToTrash = async path => {
+      trashed.push(path);
+      const { rename } = await import('node:fs/promises');
+      await rename(path, join(root, `trash-${trashed.length}`));
+    };
     await rejectsCode(owner.delete(scope, work, 'directory'), 'file-write/protected-root');
     await rejectsCode(owner.delete(scope, '../outside', 'directory'), 'file-write/outside-workspace');
     await rejectsCode(owner.delete(scope, 'outside-link', 'directory'), 'file-write/outside-workspace');
@@ -262,9 +268,37 @@ test('deletion confines regular files and recursively removes confirmed director
     assert.deepEqual(await owner.delete(scope, 'one.txt', 'file'), { absolutePath: join(canonicalWork, 'one.txt'), kind: 'file' });
     assert.deepEqual(await owner.delete(scope, 'nested', 'directory'), { absolutePath: join(canonicalWork, 'nested'), kind: 'directory' });
     await assert.rejects(access(join(work, 'nested')), { code: 'ENOENT' });
+    assert.deepEqual(trashed, [join(canonicalWork, 'one.txt'), join(canonicalWork, 'nested')]);
+    await access(join(root, 'trash-1'));
+    await access(join(root, 'trash-2', 'two.txt'));
     await access(join(outside, 'keep.txt'));
     const { lstat } = await import('node:fs/promises');
     assert.equal((await lstat(join(work, 'inside-link'))).isSymbolicLink(), true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('trash failure keeps the original file; a no-op is never reported as success', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-file-write-trash-fail-'));
+  const work = join(root, 'work');
+  try {
+    await mkdir(work);
+    await writeFile(join(work, 'keep.txt'), 'keep');
+    const owner = Object.create(FileWrite.prototype);
+    owner.ctx = { fs: {
+      processPathFromHostPath: path => path,
+      processPath: target => target,
+      contains: (parent, child) => child === parent || child.startsWith(parent + '/'),
+      resolve: async (path, options = {}) => realpath(resolvePath(options.cwd ?? work, path)),
+      stat: async target => ({ type: target === await realpath(work) ? 'directory' : 'file' }),
+      lstat: async () => ({ type: 'file' }),
+    }, sandboxPolicy: { resolve: () => ({ mode: 'workspace-write', workspaceRoot: work }) } };
+    const scope = { session: { header: { cwd: work } } };
+    owner.moveToTrash = async () => { throw Error('trash unavailable'); };
+    await assert.rejects(owner.delete(scope, 'keep.txt', 'file'), /trash unavailable/);
+    await access(join(work, 'keep.txt'));
+    owner.moveToTrash = async () => {};
+    await rejectsCode(owner.delete(scope, 'keep.txt', 'file'), 'file-write/trash-failed');
+    await access(join(work, 'keep.txt'));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
