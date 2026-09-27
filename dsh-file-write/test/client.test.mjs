@@ -311,7 +311,7 @@ test('bridges new-file menu item and calls exclusive create with chosen name', a
   const event = directoryEvent('/work/docs')
   const items = [{ label: '加入到对话框' }]
   client.document.dispatchEvent({ type: 'dsh-file-tree-menu', detail: { event, items } })
-  assert.deepEqual(items.map(item => item.label), ['加入到对话框', '新建文件', '删除文件'])
+  assert.deepEqual(items.map(item => item.label), ['加入到对话框', '新建文件', '新建文件夹', '删除文件'])
   items[1].onClick()
   view = client.renderComponent(wrapped.type, wrapped.props)
   const input = all(view.value, is('input', 'data-file-write-name'))[0]
@@ -325,6 +325,26 @@ test('bridges new-file menu item and calls exclusive create with chosen name', a
   assert.equal(client.requests[0][2].args.directory, '/work/docs')
   assert.equal(client.requests[0][2].args.basename, 'a.md')
   assert.equal(client.requests[0][2].args.text, '')
+})
+
+test('directory menu creates a child folder through the dedicated endpoint', async () => {
+  const client = loadClient({ call: async () => ({ ok: true, value: { absolutePath: '/work/docs/child' } }) })
+  const wrapped = client.slots.get('conversation.input.dock')({ session: { id: 's1' } })
+  let view = client.renderComponent(wrapped.type, wrapped.props)
+  view.effects[1]()
+  const items = []
+  client.document.dispatchEvent({ type: 'dsh-file-tree-menu', detail: { event: directoryEvent('/work/docs'), items } })
+  items.find(item => item.label === '新建文件夹').onClick()
+  view = client.renderComponent(wrapped.type, wrapped.props)
+  const form = all(view.value, is('form')).find(node => node.props['aria-label'] === '新建文件夹')
+  assert.ok(form)
+  all(form, is('input', 'data-file-write-name'))[0].props.onChange({ target: { value: 'child' } })
+  view = client.renderComponent(wrapped.type, wrapped.props)
+  await all(view.value, is('form'))[0].props.onSubmit({ preventDefault() {} })
+  assert.equal(client.requests[0][1], 'fileWrite/createDirectory')
+  assert.equal(client.requests[0][2].args.sessionId, 's1')
+  assert.equal(client.requests[0][2].args.directory, '/work/docs')
+  assert.equal(client.requests[0][2].args.basename, 'child')
 })
 
 test('ordinary file right-click offers delete only and confirms before requesting it', async () => {
@@ -359,8 +379,8 @@ test('directory deletion warns about recursively removing all contents', async (
   client.document.dispatchEvent({ type: 'dsh-file-tree-menu', detail: {
     event: directoryEvent('/work/sub'), items,
   } })
-  assert.deepEqual(items.map(item => item.label), ['新建文件', '删除文件'])
-  items[1].onClick()
+  assert.deepEqual(items.map(item => item.label), ['新建文件', '新建文件夹', '删除文件'])
+  items[2].onClick()
   const dialog = all(client.renderComponent(wrapped.type, wrapped.props).value, is('form'))
     .find(node => node.props['aria-label'] === '确认删除')
   assert.match(all(dialog, is('span'))[0].children[0], /递归删除目录/)

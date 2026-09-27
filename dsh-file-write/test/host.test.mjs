@@ -97,12 +97,13 @@ test('Host registers session lookup and marks create/save for SRC discovery', ()
   const service = new FileWrite(ctx);
   assert.equal(service.typertRemote.serviceKey, 'fileWrite');
   assert.equal(service.typertRemote.namespace, 'fileWrite');
-  assert.deepEqual(remoteMethods(service).map(({ method }) => method), ['create', 'save', 'delete']);
+  assert.deepEqual(remoteMethods(service).map(({ method }) => method), ['create', 'createDirectory', 'save', 'delete']);
   assert.equal(lookup.key, 'dsh-file-write.session');
   assert.equal(lookup.provider.parameter, 'fileWriteSession');
   assert.equal(lookup.provider.wire, 'sessionId');
   assert.equal(lookup.provider.resolve('s1') instanceof Promise, true);
   assert.match(FileWrite.prototype.create.toString(), /create\(fileWriteSession, directory, basename, text, signal\)/);
+  assert.match(FileWrite.prototype.createDirectory.toString(), /createDirectory\(fileWriteSession, directory, basename, signal\)/);
   assert.match(FileWrite.prototype.save.toString(), /save\(fileWriteSession, path, text, expectedVersion, signal\)/);
   assert.match(FileWrite.prototype.delete.toString(), /delete\(fileWriteSession, path, kind, signal\)/);
 });
@@ -122,6 +123,58 @@ test('create is confined and exclusive, and returns a versioned stat', async () 
   await rejectsCode(owner.create(scope, '/work/link.txt', 'escape.txt', 'oops'), 'file-write/outside-workspace');
   await rejectsCode(owner.create(scope, '/work/missing', 'no.txt', 'oops'), 'file-write/not-directory');
   assert.equal(calls.length, 1);
+});
+
+test('createDirectory makes only one new child under an existing workspace directory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-file-write-mkdir-'));
+  const work = join(root, 'work');
+  const outside = join(root, 'outside');
+  try {
+    await mkdir(join(work, 'sub'), { recursive: true });
+    await mkdir(outside);
+    await writeFile(join(work, 'sub', 'existing.txt'), 'keep');
+    await symlink(outside, join(work, 'outside-link'));
+    await symlink(join(work, 'sub'), join(work, 'inside-link'));
+    const owner = Object.create(FileWrite.prototype);
+    owner.ctx = {
+      fs: {
+        resolve: async (path, options = {}) => {
+          const displayPath = resolvePath(options.cwd ?? work, path);
+          try { return { targetKey: await realpath(displayPath) }; }
+          catch (error) { if (error.code === 'ENOENT') return { targetKey: displayPath }; throw error; }
+        },
+        processPath: target => target.targetKey,
+        processPathFromHostPath: path => path,
+        contains: (parent, child) => child.targetKey === parent.targetKey || child.targetKey.startsWith(parent.targetKey + '/'),
+        stat: async target => {
+          const { stat } = await import('node:fs/promises');
+          try { const value = await stat(target.targetKey); return { type: value.isDirectory() ? 'directory' : 'file' }; }
+          catch (error) { if (error.code === 'ENOENT') return; throw error; }
+        },
+        lstat: async (path) => {
+          const { lstat } = await import('node:fs/promises');
+          try { const value = await lstat(path); return { type: value.isDirectory() ? 'directory' : 'file' }; }
+          catch (error) { if (error.code === 'ENOENT') return; throw error; }
+        },
+      },
+      sandboxPolicy: { resolve: () => ({ mode: 'workspace-write', workspaceRoot: work }) },
+    };
+    const scope = { session: { id: 's1', header: { cwd: work } } };
+    const expected = join(await realpath(work), 'sub', 'child');
+    assert.deepEqual(await owner.createDirectory(scope, 'sub', 'child'), { absolutePath: expected });
+    await access(expected);
+    await rejectsCode(owner.createDirectory(scope, 'sub', 'child'), 'file-write/already-exists');
+    await rejectsCode(owner.createDirectory(scope, 'sub', 'existing.txt'), 'file-write/already-exists');
+    await rejectsCode(owner.createDirectory(scope, 'missing', 'child'), 'file-write/not-directory');
+    await rejectsCode(owner.createDirectory(scope, 'sub', '../escape'), 'gateway/bad-request');
+    await rejectsCode(owner.createDirectory(scope, '../outside', 'escape'), 'file-write/outside-workspace');
+    await rejectsCode(owner.createDirectory(scope, 'outside-link', 'escape'), 'file-write/outside-workspace');
+    await access(join(outside));
+    owner.ctx.sandboxPolicy.resolve = () => ({ mode: 'read-only', workspaceRoot: work });
+    await rejectsCode(owner.createDirectory(scope, 'sub', 'denied'), 'file-write/policy-denied');
+    delete owner.ctx.fs.processPathFromHostPath;
+    await rejectsCode(owner.createDirectory(scope, 'sub', 'denied'), 'file-write/unsupported-backend');
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('save rejects escapes, symlinks, stale edits, binary, and oversized files', async () => {

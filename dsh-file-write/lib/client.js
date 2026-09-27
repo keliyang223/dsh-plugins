@@ -200,7 +200,7 @@ window.__ModuleLoader__.load({
     }
     function basenameValid(name) {
       return name !== '' && name !== '.' && name !== '..' && name.trim() === name &&
-        !/[/\\\u0000-\u001f\u007f]/u.test(name)
+        !/[/\\:\u0000-\u001f\u007f]/u.test(name)
     }
     function FileTreeCreate({ session, fileWrite }) {
       const sessionId = session?.id || session?.sessionId || session?.header?.id || session?.session?.id || session?.session?.sessionId || session?.session?.header?.id
@@ -214,9 +214,9 @@ window.__ModuleLoader__.load({
       const abortRef = useRef(null)
       const mounted = useRef(true)
       useEffect(() => () => { mounted.current = false; abortRef.current?.abort() }, [])
-      function openCreate(directory) {
+      function openCreate(directory, kind = 'file') {
         setMenu(null)
-        setDialog(directory)
+        setDialog({ directory, kind })
         setName('')
         setError('')
       }
@@ -233,6 +233,7 @@ window.__ModuleLoader__.load({
           bridgeSeen.current.add(detail.event)
           if (target.kind === 'directory') {
             detail.items.push({ label: '新建文件', onClick: () => openCreate(target.path) })
+            detail.items.push({ label: '新建文件夹', onClick: () => openCreate(target.path, 'directory') })
           }
           if (target.kind === 'directory' || target.kind === 'file') {
             detail.items.push({ label: '删除文件', onClick: () => openDelete(target) })
@@ -245,7 +246,7 @@ window.__ModuleLoader__.load({
           // bubble only runs when no other menu handled this tree event.
           event.preventDefault()
           setMenu({ target, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 170)),
-            y: Math.max(8, Math.min(event.clientY, window.innerHeight - 85)) })
+            y: Math.max(8, Math.min(event.clientY, window.innerHeight - (target.kind === 'directory' ? 125 : 85))) })
         }
         document.addEventListener('dsh-file-tree-menu', onBridge)
         document.addEventListener('contextmenu', onContextMenu)
@@ -268,16 +269,20 @@ window.__ModuleLoader__.load({
       async function create(event) {
         event.preventDefault()
         if (pending) return
-        if (!basenameValid(name)) { setError('请输入有效文件名（不能包含路径分隔符）。'); return }
-        if (!fileWrite?.create || !sessionId) { setError('当前会话的文件写入服务不可用。'); return }
+        if (!basenameValid(name)) { setError('请输入有效名称（不能包含路径分隔符）。'); return }
+        if (!(dialog?.kind === 'directory' ? fileWrite?.createDirectory : fileWrite?.create) || !sessionId) {
+          setError('当前会话的文件写入服务不可用。'); return
+        }
         setPending(true)
         setError('')
         const controller = new AbortController()
         abortRef.current = controller
         try {
-          const result = valueOf(await fileWrite.create(sessionId, dialog, name, '', controller.signal))
+          const result = valueOf(dialog.kind === 'directory'
+            ? await fileWrite.createDirectory(sessionId, dialog.directory, name, controller.signal)
+            : await fileWrite.create(sessionId, dialog.directory, name, '', controller.signal))
           if (!mounted.current || controller.signal.aborted) return
-          if (!result?.absolutePath || !result?.version) throw new Error('创建响应缺少路径或版本')
+          if (!result?.absolutePath || (dialog.kind === 'file' && !result.version)) throw new Error('创建响应缺少路径或版本')
           setDialog(null)
           // The built-in tree reload button uses its own directory watcher; request
           // a refresh as a best effort if the current tree is still on screen.
@@ -321,18 +326,21 @@ window.__ModuleLoader__.load({
         }, menu.target.kind === 'directory' && h('button', {
           type: 'button', role: 'menuitem', autoFocus: true, style: buttonStyle,
           onClick: () => openCreate(menu.target.path) }, '新建文件'),
+        menu.target.kind === 'directory' && h('button', {
+          type: 'button', role: 'menuitem', style: buttonStyle,
+          onClick: () => openCreate(menu.target.path, 'directory') }, '新建文件夹'),
         (menu.target.kind === 'directory' || menu.target.kind === 'file') && h('button', {
           type: 'button', role: 'menuitem', autoFocus: menu.target.kind === 'file', style: buttonStyle,
           onClick: () => openDelete(menu.target) }, '删除文件')), document.body),
         dialog !== null && createPortal(h('div', {
           role: 'presentation', 'data-file-write-dialog': '',
           style: { position: 'fixed', inset: 0, zIndex: 2147483647, background: '#0008', display: 'grid', placeItems: 'center' },
-        }, h('form', { role: 'dialog', 'aria-modal': 'true', 'aria-label': '新建文件', onSubmit: create,
+        }, h('form', { role: 'dialog', 'aria-modal': 'true', 'aria-label': dialog.kind === 'directory' ? '新建文件夹' : '新建文件', onSubmit: create,
           style: { display: 'flex', flexDirection: 'column', gap: 12, padding: 18, width: 'min(360px, 90vw)',
             background: 'var(--dsw-alias-bg-layer-2, #fff)', color: 'var(--dsw-alias-label-primary, #222)', borderRadius: 8 } },
-        h('strong', null, '新建文件'),
-        h('small', { title: dialog, style: { overflowWrap: 'anywhere' } }, `目录：${dialog}`),
-        h('label', null, '文件名 ', h('input', { autoFocus: true, required: true, value: name,
+        h('strong', null, dialog.kind === 'directory' ? '新建文件夹' : '新建文件'),
+        h('small', { title: dialog.directory, style: { overflowWrap: 'anywhere' } }, `目录：${dialog.directory}`),
+        h('label', null, dialog.kind === 'directory' ? '文件夹名 ' : '文件名 ', h('input', { autoFocus: true, required: true, value: name,
           disabled: pending, onChange: (event) => setName(event.target.value), 'data-file-write-name': '',
           style: { boxSizing: 'border-box', width: '100%', padding: 6 } })),
         error && h('span', { role: 'alert', style: { color: '#c44' } }, error),
@@ -367,6 +375,10 @@ window.__ModuleLoader__.load({
         create(sessionId, directory, basename, text, signal) {
           return ctx.connection.rpc.call('/api', 'fileWrite/create',
             { args: { sessionId: sessionId?.id || sessionId?.sessionId || sessionId, directory, basename, text } }, signal)
+        },
+        createDirectory(sessionId, directory, basename, signal) {
+          return ctx.connection.rpc.call('/api', 'fileWrite/createDirectory',
+            { args: { sessionId: sessionId?.id || sessionId?.sessionId || sessionId, directory, basename } }, signal)
         },
         save(sessionId, path, text, expectedVersion, signal) {
           return ctx.connection.rpc.call('/api', 'fileWrite/save',

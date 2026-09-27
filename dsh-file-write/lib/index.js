@@ -1,6 +1,6 @@
 import { TextDecoder } from 'node:util';
 import { posix, win32 } from 'node:path';
-import { rm } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { TypertRemoteService, Remote, RemoteError } from '@deepseek-ai/dsh-typert-protocol';
 
 // The 0.1.7-rc.1 Gateway discovers these public Remote markers in SRC mode.
@@ -114,6 +114,42 @@ export class FileWrite extends TypertRemoteService {
     }
   }
 
+  // wire: fileWrite.createDirectory({sessionId, directory, basename})
+  // The DSH FileSystem API has no mkdir primitive. Restrict the Node syscall
+  // to the local backend and re-resolve the parent immediately beforehand.
+  async createDirectory(fileWriteSession, directory, basename, signal) {
+    if (typeof this.ctx.fs.processPathFromHostPath !== 'function') {
+      fail('file-write/unsupported-backend', 'directory creation requires a local filesystem backend');
+    }
+    assertPath(directory, 'directory');
+    assertBasename(basename);
+    const policy = this.policyOf(fileWriteSession);
+    const root = await this.workspaceOf(policy, signal);
+    const parent = await this.confinedPath(root, directory, signal);
+    if ((await this.ctx.fs.stat(parent, signal))?.type !== 'directory') {
+      fail('file-write/not-directory', 'parent directory must already exist', directory);
+    }
+    const path = this.ctx.fs.processPath(parent);
+    const paths = path.startsWith('/') ? posix : win32;
+    const name = paths.join(path, basename);
+    if (await this.ctx.fs.lstat(name, undefined, signal) !== undefined) {
+      fail('file-write/already-exists', 'entry already exists', name);
+    }
+    const fresh = await this.confinedPath(root, directory, signal);
+    if (this.ctx.fs.processPath(fresh) !== path ||
+        (await this.ctx.fs.stat(fresh, signal))?.type !== 'directory') {
+      fail('file-write/stale-entry', 'parent directory changed during creation', directory);
+    }
+    signal?.throwIfAborted();
+    try {
+      await mkdir(name);
+    } catch (error) {
+      if (isFsCode(error, 'EEXIST')) fail('file-write/already-exists', 'entry already exists', name);
+      throw error;
+    }
+    return { absolutePath: name };
+  }
+
   // wire: fileWrite.save({sessionId, path, text, expectedVersion})
   async save(fileWriteSession, path, text, expectedVersion, signal) {
     const bytes = checkText(text);
@@ -191,7 +227,7 @@ export class FileWrite extends TypertRemoteService {
 // Standard decorators without a build step; markers are attached to the
 // prototype on construction, as required by DSH's Typert SRC gateway.
 const remoteInitializers = [];
-for (const method of ['create', 'save', 'delete']) {
+for (const method of ['create', 'createDirectory', 'save', 'delete']) {
   Remote(FileWrite.prototype[method], {
     kind: 'method', name: method, static: false, private: false,
     addInitializer(initializer) { remoteInitializers.push(initializer); },
