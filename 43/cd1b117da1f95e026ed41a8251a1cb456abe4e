@@ -1,0 +1,28 @@
+dsh-file-write/README.en.md
+  h_6ee620acf9166c 5,10,15,33
+dsh-file-write/README.md
+  h_6ee620acf9166c 5,10,15,33
+dsh-file-write/lib/client.js
+  h_6ee620acf9166c 21-28,266,341,362,378,383,386,388,393-394
+dsh-file-write/lib/index.js
+  h_6ee620acf9166c 3-4,193-201,228-244
+dsh-file-write/package.json
+  h_6ee620acf9166c 5,14-18,20-21,24-26
+dsh-file-write/pnpm-lock.yaml
+  h_6ee620acf9166c 14-16,45-68,72-304,323-342,344-554
+dsh-file-write/test/client.test.mjs
+  h_6ee620acf9166c 314,322-325,355,363,368,371-375,383,392,395-396
+dsh-file-write/test/host.test.mjs
+  h_6ee620acf9166c 217,256-261,271-273,280-304
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "43cd1b117da1f95e026ed41a8251a1cb456abe4e",
+  "prompts": {},
+  "humans": {
+    "h_6ee620acf9166c": {
+      "author": "keliyang <keliyang@zuoyebang.com>"
+    }
+  }
+}
