@@ -5,7 +5,7 @@
 | 插件 | 简介 | 文档 |
 |---|---|---|
 | **dsh-file-to-chat** | 在 DSH Web 文件树中将文件、文件夹或文本预览选中行引用插入当前对话草稿；不自动发送，也不读取或上传文件内容。 | [插件 README](dsh-file-to-chat/README.md) · [English](dsh-file-to-chat/README.en.md) |
-| **dsh-file-write** | 在右侧预览编辑并保存 Markdown 等文本文件；在文件树右键创建或删除文件及目录，支持版本冲突防护。 | [插件 README](dsh-file-write/README.md) · [English](dsh-file-write/README.en.md) |
+| **dsh-file-write** | 在右侧预览编辑并保存 Markdown 等文本文件；在文件树右键创建、重命名文件及目录，或移入系统废纸篓，支持版本冲突防护。 | [插件 README](dsh-file-write/README.md) · [English](dsh-file-write/README.en.md) |
 | **dsh-markdown** | 为 Markdown 预览添加可折叠目录，自动扫描标题，点击目录项可滚动到对应标题，并记住目录显示状态。 | [README](dsh-markdown/README.md) |
 
 ## 使用案例：将目录加入对话
@@ -22,9 +22,9 @@
 
 ## 使用案例：文件树右键管理文件
 
-在文件树中右键文件夹，`dsh-file-write` 会提供“新建文件”“新建文件夹”和“删除文件”操作。截图还显示了同时安装 `dsh-file-to-chat` 时的“加入到对话框”选项；删除前会再次确认。
+在文件树中右键文件夹，`dsh-file-write` 会提供“新建文件”“新建文件夹”“重命名”和“移到废纸篓”操作。截图还显示了同时安装 `dsh-file-to-chat` 时的“加入到对话框”选项；移到废纸篓前会再次确认。
 
-![dsh-file-write 在文件夹右键菜单中提供新建文件、新建文件夹和删除操作的示例](file-write-case.jpg)
+![dsh-file-write 在文件夹右键菜单中提供新建文件、新建文件夹和移到废纸篓操作的示例](file-write-case.jpg)
 
 ## 安装
 
@@ -37,7 +37,7 @@ This repository contains extensions for DeepSeek Harness (DSH).
 | Plugin | Description | Documentation |
 |---|---|---|
 | **dsh-file-to-chat** | Insert a file, directory, or selected text-preview lines into the current DSH Web conversation draft. It does not send messages automatically or read and upload file contents. | [README](dsh-file-to-chat/README.en.md) |
-| **dsh-file-write** | Edit and save Markdown and other text files in the right-hand preview. Create or delete files and directories from the file tree, with version-conflict protection. | [README](dsh-file-write/README.en.md) |
+| **dsh-file-write** | Edit and save Markdown and other text files in the right-hand preview. Create and rename files or directories, or move them to the system Trash from the file tree, with version-conflict protection. | [README](dsh-file-write/README.en.md) |
 | **dsh-markdown** | Adds a persistent, collapsible table of contents to Markdown previews. It scans headings, scrolls to the selected heading, and remembers the TOC visibility state. | [README](dsh-markdown/README.md) |
 
 ## Installation

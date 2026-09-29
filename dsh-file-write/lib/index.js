@@ -1,6 +1,6 @@
 import { TextDecoder } from 'node:util';
 import { posix, win32 } from 'node:path';
-import { mkdir, lstat } from 'node:fs/promises';
+import { mkdir, lstat, rename as renameEntry } from 'node:fs/promises';
 import trash from 'trash';
 import { TypertRemoteService, Remote, RemoteError } from '@deepseek-ai/dsh-typert-protocol';
 
@@ -190,6 +190,58 @@ export class FileWrite extends TypertRemoteService {
     }
   }
 
+  // wire: fileWrite.rename({sessionId, path, kind, basename})
+  // Node's rename may overwrite a target on some platforms. Recheck the
+  // destination immediately before the syscall; concurrent external creation
+  // remains a TOCTOU risk (Node has no portable no-replace rename primitive).
+  async rename(fileWriteSession, path, kind, basename, signal) {
+    if (typeof this.ctx.fs.processPathFromHostPath !== 'function') {
+      fail('file-write/unsupported-backend', 'renaming requires a local filesystem backend');
+    }
+    assertPath(path, 'path');
+    assertBasename(basename);
+    if (kind !== 'file' && kind !== 'directory') fail('gateway/bad-request', 'kind must be file or directory');
+    const policy = this.policyOf(fileWriteSession);
+    const root = await this.workspaceOf(policy, signal);
+    const target = await this.confinedPath(root, path, signal);
+    const source = this.ctx.fs.processPath(target);
+    if (source === this.ctx.fs.processPath(root)) {
+      fail('file-write/protected-root', 'cannot rename the session workspace root', path);
+    }
+    if ((await this.ctx.fs.lstat(path, { cwd: policy.workspaceRoot }, signal))?.type !== kind) {
+      fail('file-write/stale-entry', 'entry type changed or entry no longer exists', path);
+    }
+    const paths = source.startsWith('/') ? posix : win32;
+    const destination = paths.join(paths.dirname(source), basename);
+    if (destination === source) fail('file-write/same-name', 'new name must differ from the existing name', path);
+    if (await this.ctx.fs.lstat(destination, undefined, signal) !== undefined) {
+      fail('file-write/already-exists', 'destination already exists', destination);
+    }
+    const fresh = await this.confinedPath(root, path, signal);
+    if (this.ctx.fs.processPath(fresh) !== source ||
+        (await this.ctx.fs.lstat(path, { cwd: policy.workspaceRoot }, signal))?.type !== kind) {
+      fail('file-write/stale-entry', 'entry changed during rename', path);
+    }
+    const freshDestination = await this.confinedPath(root, destination, signal);
+    if (this.ctx.fs.processPath(freshDestination) !== destination ||
+        (await this.ctx.fs.stat(await this.confinedPath(root, paths.dirname(destination), signal), signal))?.type !== 'directory') {
+      fail('file-write/stale-entry', 'destination parent changed during rename', destination);
+    }
+    if (await this.ctx.fs.lstat(destination, undefined, signal) !== undefined) {
+      fail('file-write/already-exists', 'destination already exists', destination);
+    }
+    signal?.throwIfAborted();
+    try {
+      await renameEntry(source, destination);
+    } catch (error) {
+      if (isFsCode(error, 'EEXIST') || isFsCode(error, 'ENOTEMPTY')) {
+        fail('file-write/already-exists', 'destination already exists', destination);
+      }
+      throw error;
+    }
+    return { absolutePath: destination, previousPath: source, kind };
+  }
+
   async moveToTrash(absolutePath) {
     await trash(absolutePath, { glob: false });
   }
@@ -248,7 +300,7 @@ export class FileWrite extends TypertRemoteService {
 // Standard decorators without a build step; markers are attached to the
 // prototype on construction, as required by DSH's Typert SRC gateway.
 const remoteInitializers = [];
-for (const method of ['create', 'createDirectory', 'save', 'delete']) {
+for (const method of ['create', 'createDirectory', 'save', 'delete', 'rename']) {
   Remote(FileWrite.prototype[method], {
     kind: 'method', name: method, static: false, private: false,
     addInitializer(initializer) { remoteInitializers.push(initializer); },

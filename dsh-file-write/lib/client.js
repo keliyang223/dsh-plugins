@@ -37,6 +37,7 @@ window.__ModuleLoader__.load({
         createFile: 'M6 3h8l4 4v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm8 0v5h4M11 12v6m-3-3h6',
         createDirectory: 'M3 7V5a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v2M3 7h18l-1.5 12a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2L3 7Zm9 4v6m-3-3h6',
         delete: 'M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v6m4-6v6',
+        rename: 'M4 20h4l11-11-4-4L4 16v4Zm9-13 4 4M4 20h16',
       }[kind]
       return h('svg', {
         'aria-hidden': true, viewBox: '0 0 24 24', width: 16, height: 16,
@@ -234,6 +235,7 @@ window.__ModuleLoader__.load({
       const [menu, setMenu] = useState(null)
       const [dialog, setDialog] = useState(null)
       const [deleting, setDeleting] = useState(null)
+      const [renaming, setRenaming] = useState(null)
       const [name, setName] = useState('')
       const [error, setError] = useState('')
       const [pending, setPending] = useState(false)
@@ -252,6 +254,12 @@ window.__ModuleLoader__.load({
         setDeleting(target)
         setError('')
       }
+      function openRename(target) {
+        setMenu(null)
+        setRenaming(target)
+        setName(target.path.replace(/[\\/]+$/u, '').split(/[\\/]/u).at(-1) || '')
+        setError('')
+      }
       useEffect(() => {
         function onBridge(e) {
           const detail = e.detail
@@ -263,6 +271,7 @@ window.__ModuleLoader__.load({
             detail.items.push({ label: '新建文件夹', icon: 'createDirectory', onClick: () => openCreate(target.path, 'directory') })
           }
           if (target.kind === 'directory' || target.kind === 'file') {
+            detail.items.push({ label: '重命名', icon: 'rename', onClick: () => openRename(target) })
             detail.items.push({ label: '移到废纸篓', icon: 'delete', onClick: () => openDelete(target) })
           }
         }
@@ -273,7 +282,7 @@ window.__ModuleLoader__.load({
           // bubble only runs when no other menu handled this tree event.
           event.preventDefault()
           setMenu({ target, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 170)),
-            y: Math.max(8, Math.min(event.clientY, window.innerHeight - (target.kind === 'directory' ? 125 : 85))) })
+            y: Math.max(8, Math.min(event.clientY, window.innerHeight - (target.kind === 'directory' ? 160 : 115))) })
         }
         document.addEventListener('dsh-file-tree-menu', onBridge)
         document.addEventListener('contextmenu', onContextMenu)
@@ -321,6 +330,32 @@ window.__ModuleLoader__.load({
           if (abortRef.current === controller) abortRef.current = null
         }
       }
+      async function renameTarget(event) {
+        event.preventDefault()
+        if (pending || !renaming) return
+        if (!basenameValid(name)) { setError('请输入有效名称（不能包含路径分隔符）。'); return }
+        const oldName = renaming.path.replace(/[\\/]+$/u, '').split(/[\\/]/u).at(-1)
+        if (name === oldName) { setError('新名称不能与原名称相同。'); return }
+        if (!fileWrite?.rename || !sessionId) { setError('当前会话的重命名服务不可用。'); return }
+        setPending(true)
+        setError('')
+        const controller = new AbortController()
+        abortRef.current = controller
+        try {
+          const result = valueOf(await fileWrite.rename(sessionId, renaming.path, renaming.kind, name, controller.signal))
+          if (!mounted.current || controller.signal.aborted) return
+          if (typeof result?.absolutePath !== 'string' || result.previousPath !== renaming.path || result.kind !== renaming.kind) {
+            throw new Error('重命名响应与目标不匹配')
+          }
+          setRenaming(null)
+          document.querySelector('[data-files-state="tree"] [data-files-reload]')?.click()
+        } catch (failure) {
+          if (mounted.current && !controller.signal.aborted) setError(failureMessage(failure))
+        } finally {
+          if (mounted.current) setPending(false)
+          if (abortRef.current === controller) abortRef.current = null
+        }
+      }
       async function removeEntry(event) {
         event.preventDefault()
         if (pending || !deleting) return
@@ -359,6 +394,9 @@ window.__ModuleLoader__.load({
           onClick: () => openCreate(menu.target.path, 'directory') }, menuIcon('createDirectory'), h('span', null, '新建文件夹')),
         (menu.target.kind === 'directory' || menu.target.kind === 'file') && h('button', {
           type: 'button', role: 'menuitem', autoFocus: menu.target.kind === 'file', style: menuButtonStyle,
+          onClick: () => openRename(menu.target) }, menuIcon('rename'), h('span', null, '重命名')),
+        (menu.target.kind === 'directory' || menu.target.kind === 'file') && h('button', {
+          type: 'button', role: 'menuitem', style: menuButtonStyle,
           onClick: () => openDelete(menu.target) }, menuIcon('delete'), h('span', null, '移到废纸篓'))), document.body),
         dialog !== null && createPortal(h('div', {
           role: 'presentation', 'data-file-write-dialog': '',
@@ -377,6 +415,24 @@ window.__ModuleLoader__.load({
             onClick: () => setDialog(null) }, '取消'),
           h('button', { type: 'submit', style: createButtonStyle, disabled: pending || !basenameValid(name),
             'data-file-write-create': '' }, pending ? '创建中…' : '创建')))), document.body),
+        renaming && createPortal(h('div', {
+          role: 'presentation', 'data-file-write-rename-dialog': '',
+          style: { position: 'fixed', inset: 0, zIndex: 2147483647, background: '#0008', display: 'grid', placeItems: 'center' },
+        }, h('form', { role: 'dialog', 'aria-modal': 'true', 'aria-label': '重命名', onSubmit: renameTarget,
+          style: { display: 'flex', flexDirection: 'column', gap: 12, padding: 18, width: 'min(360px, 90vw)',
+            background: 'var(--dsw-alias-bg-layer-2, #fff)', color: 'var(--dsw-alias-label-primary, #222)', borderRadius: 8 } },
+        h('strong', null, `重命名${renaming.kind === 'directory' ? '文件夹' : '文件'}`),
+        h('small', { title: renaming.path, style: { overflowWrap: 'anywhere' } }, renaming.path),
+        h('label', null, '新名称 ', h('input', { autoFocus: true, required: true, value: name,
+          disabled: pending, onChange: (event) => setName(event.target.value), 'data-file-write-rename-name': '',
+          style: { boxSizing: 'border-box', width: '100%', padding: 6 } })),
+        error && h('span', { role: 'alert', style: { color: '#c44' } }, error),
+        h('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end' } },
+          h('button', { type: 'button', style: buttonStyle, disabled: pending,
+            onClick: () => setRenaming(null) }, '取消'),
+          h('button', { type: 'submit', style: createButtonStyle,
+            disabled: pending || !basenameValid(name) || name === renaming.path.replace(/[\\/]+$/u, '').split(/[\\/]/u).at(-1),
+            'data-file-write-rename': '' }, pending ? '重命名中…' : '重命名')))), document.body),
         deleting && createPortal(h('div', {
           role: 'presentation', 'data-file-write-delete-dialog': '',
           style: { position: 'fixed', inset: 0, zIndex: 2147483647, background: '#0008', display: 'grid', placeItems: 'center' },
@@ -415,6 +471,10 @@ window.__ModuleLoader__.load({
         delete(sessionId, path, kind, signal) {
           return ctx.connection.rpc.call('/api', 'fileWrite/delete',
             { args: { sessionId: sessionId?.id || sessionId?.sessionId || sessionId, path, kind } }, signal)
+        },
+        rename(sessionId, path, kind, basename, signal) {
+          return ctx.connection.rpc.call('/api', 'fileWrite/rename',
+            { args: { sessionId: sessionId?.id || sessionId?.sessionId || sessionId, path, kind, basename } }, signal)
         },
       }
       ctx.effect(() => ctx.documentPreviews.register({

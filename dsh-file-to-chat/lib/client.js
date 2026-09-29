@@ -241,6 +241,7 @@ window.__ModuleLoader__.load({
       createFile: 'M6 3h8l4 4v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm8 0v5h4M11 12v6m-3-3h6',
       createDirectory: 'M3 7V5a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v2M3 7h18l-1.5 12a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2L3 7Zm9 4v6m-3-3h6',
       delete: 'M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v6m4-6v6',
+      rename: 'M4 20h4l11-11-4-4L4 16v4Zm9-13 4 4M4 20h16',
     }
     function menuIcon(kind) {
       const graphic = menuIcons[kind]
@@ -275,7 +276,7 @@ window.__ModuleLoader__.load({
             items,
             span: inputActions.captureInsertion(),
             x: Math.max(8, Math.min(x, window.innerWidth - 220)),
-            y: Math.max(8, Math.min(y, window.innerHeight - 78)),
+            y: Math.max(8, Math.min(y, window.innerHeight - (items.length * 27 + 12))),
           })
         }
 

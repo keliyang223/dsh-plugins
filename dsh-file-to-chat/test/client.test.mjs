@@ -108,7 +108,7 @@ test('right-click on a file row inserts its path but does not open the file', ()
   assert.equal(portal.container, document.body)
   assert.equal(portal.child.props.role, 'menu')
   assert.equal(portal.child.props.style.left, 560)
-  assert.equal(portal.child.props.style.top, 849)
+  assert.equal(portal.child.props.style.top, 888)
   assert.equal(portal.child.props.style.fontSize, 12)
   const item = portal.child.children[0]
   assert.equal(item.children[0].type, 'svg')

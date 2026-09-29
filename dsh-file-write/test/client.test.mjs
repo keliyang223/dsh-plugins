@@ -311,8 +311,8 @@ test('bridges new-file menu item and calls exclusive create with chosen name', a
   const event = directoryEvent('/work/docs')
   const items = [{ label: '加入到对话框' }]
   client.document.dispatchEvent({ type: 'dsh-file-tree-menu', detail: { event, items } })
-  assert.deepEqual(items.map(item => item.label), ['加入到对话框', '新建文件', '新建文件夹', '移到废纸篓'])
-  assert.deepEqual(items.slice(1).map(item => item.icon), ['createFile', 'createDirectory', 'delete'])
+  assert.deepEqual(items.map(item => item.label), ['加入到对话框', '新建文件', '新建文件夹', '重命名', '移到废纸篓'])
+  assert.deepEqual(items.slice(1).map(item => item.icon), ['createFile', 'createDirectory', 'rename', 'delete'])
   items[1].onClick()
   view = client.renderComponent(wrapped.type, wrapped.props)
   const input = all(view.value, is('input', 'data-file-write-name'))[0]
@@ -330,6 +330,34 @@ test('bridges new-file menu item and calls exclusive create with chosen name', a
   assert.equal(client.requests[0][2].args.directory, '/work/docs')
   assert.equal(client.requests[0][2].args.basename, 'a.md')
   assert.equal(client.requests[0][2].args.text, '')
+})
+
+test('renames a file through the shared tree menu without changing its contents', async () => {
+  const client = loadClient({ call: async () => ({ ok: true, value: {
+    absolutePath: '/work/new.md', previousPath: '/work/a.md', kind: 'file',
+  } }) })
+  const wrapped = client.slots.get('conversation.input.dock')({ session: { id: 's1' } })
+  const view = client.renderComponent(wrapped.type, wrapped.props)
+  view.effects[1]()
+  const items = []
+  client.document.dispatchEvent({ type: 'dsh-file-tree-menu', detail: {
+    event: directoryEvent('/work/a.md', 'file'), items,
+  } })
+  assert.deepEqual(items.map(item => item.label), ['重命名', '移到废纸篓'])
+  items[0].onClick()
+  let dialog = all(client.renderComponent(wrapped.type, wrapped.props).value, is('form'))
+    .find(node => node.props['aria-label'] === '重命名')
+  assert.equal(all(dialog, is('input', 'data-file-write-rename-name'))[0].props.value, 'a.md')
+  assert.equal(all(dialog, is('button', 'data-file-write-rename'))[0].props.disabled, true)
+  all(dialog, is('input', 'data-file-write-rename-name'))[0].props.onChange({ target: { value: 'new.md' } })
+  dialog = all(client.renderComponent(wrapped.type, wrapped.props).value, is('form'))
+    .find(node => node.props['aria-label'] === '重命名')
+  await dialog.props.onSubmit({ preventDefault() {} })
+  assert.equal(client.requests[0][1], 'fileWrite/rename')
+  assert.equal(client.requests[0][2].args.sessionId, 's1')
+  assert.equal(client.requests[0][2].args.path, '/work/a.md')
+  assert.equal(client.requests[0][2].args.kind, 'file')
+  assert.equal(client.requests[0][2].args.basename, 'new.md')
 })
 
 test('directory menu creates a child folder through the dedicated endpoint', async () => {
@@ -360,9 +388,9 @@ test('ordinary file right-click offers move to Trash and confirms before request
   const event = directoryEvent('/work/a.md', 'file')
   const items = [{ label: '加入到对话框' }]
   client.document.dispatchEvent({ type: 'dsh-file-tree-menu', detail: { event, items } })
-  assert.deepEqual(items.map(item => item.label), ['加入到对话框', '移到废纸篓'])
+  assert.deepEqual(items.map(item => item.label), ['加入到对话框', '重命名', '移到废纸篓'])
   assert.equal(client.requests.length, 0)
-  items[1].onClick()
+  items[2].onClick()
   view = client.renderComponent(wrapped.type, wrapped.props)
   assert.equal(client.requests.length, 0)
   const dialog = all(view.value, is('form')).find(node => node.props['aria-label'] === '确认移到废纸篓')
@@ -389,8 +417,8 @@ test('moving a directory to Trash keeps its contents recoverable', async () => {
   client.document.dispatchEvent({ type: 'dsh-file-tree-menu', detail: {
     event: directoryEvent('/work/sub'), items,
   } })
-  assert.deepEqual(items.map(item => item.label), ['新建文件', '新建文件夹', '移到废纸篓'])
-  items[2].onClick()
+  assert.deepEqual(items.map(item => item.label), ['新建文件', '新建文件夹', '重命名', '移到废纸篓'])
+  items[3].onClick()
   const dialog = all(client.renderComponent(wrapped.type, wrapped.props).value, is('form'))
     .find(node => node.props['aria-label'] === '确认移到废纸篓')
   assert.match(all(dialog, is('span'))[0].children[0], /目录及其中所有内容将一起移入系统废纸篓.*可从中恢复/)

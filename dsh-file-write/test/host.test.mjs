@@ -97,7 +97,7 @@ test('Host registers session lookup and marks create/save for SRC discovery', ()
   const service = new FileWrite(ctx);
   assert.equal(service.typertRemote.serviceKey, 'fileWrite');
   assert.equal(service.typertRemote.namespace, 'fileWrite');
-  assert.deepEqual(remoteMethods(service).map(({ method }) => method), ['create', 'createDirectory', 'save', 'delete']);
+  assert.deepEqual(remoteMethods(service).map(({ method }) => method), ['create', 'createDirectory', 'save', 'delete', 'rename']);
   assert.equal(lookup.key, 'dsh-file-write.session');
   assert.equal(lookup.provider.parameter, 'fileWriteSession');
   assert.equal(lookup.provider.wire, 'sessionId');
@@ -106,6 +106,7 @@ test('Host registers session lookup and marks create/save for SRC discovery', ()
   assert.match(FileWrite.prototype.createDirectory.toString(), /createDirectory\(fileWriteSession, directory, basename, signal\)/);
   assert.match(FileWrite.prototype.save.toString(), /save\(fileWriteSession, path, text, expectedVersion, signal\)/);
   assert.match(FileWrite.prototype.delete.toString(), /delete\(fileWriteSession, path, kind, signal\)/);
+  assert.match(FileWrite.prototype.rename.toString(), /rename\(fileWriteSession, path, kind, basename, signal\)/);
 });
 
 test('create is confined and exclusive, and returns a versioned stat', async () => {
@@ -202,6 +203,7 @@ test('session read-only policy prevents all mutations even when backend is permi
   await rejectsCode(owner.create(scope, 'sub', 'new.txt', 'x'), 'file-write/policy-denied');
   await rejectsCode(owner.save(scope, 'sub/note.txt', 'x', 'v1'), 'file-write/policy-denied');
   await rejectsCode(owner.delete(scope, 'sub/note.txt', 'file'), 'file-write/policy-denied');
+  await rejectsCode(owner.rename(scope, 'sub/note.txt', 'file', 'renamed.txt'), 'file-write/policy-denied');
   assert.equal(calls.length, 0);
 });
 
@@ -212,6 +214,60 @@ test('danger-full-access sessions still use the workspace-only filesystem fence'
   assert.equal(calls[0].policy.mode, 'workspace-write');
   assert.equal(calls[0].policy.workspaceRoot, '/work');
   await rejectsCode(owner.create(scope, '/outside', 'escape.txt', 'x'), 'file-write/outside-workspace');
+});
+
+test('rename confines entries and refuses collisions without overwriting files', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-file-write-rename-'));
+  const work = join(root, 'work');
+  const outside = join(root, 'outside');
+  try {
+    await mkdir(join(work, 'nested'), { recursive: true });
+    await mkdir(outside);
+    await writeFile(join(work, 'a.md'), 'original');
+    await writeFile(join(work, 'b.md'), 'existing');
+    await writeFile(join(work, 'nested', 'child.txt'), 'child');
+    await symlink(outside, join(work, 'outside-link'));
+    await symlink(join(work, 'nested'), join(work, 'inside-link'));
+    const owner = Object.create(FileWrite.prototype);
+    owner.ctx = { fs: {
+      resolve: async (path, options = {}) => {
+        const displayPath = resolvePath(options.cwd ?? work, path);
+        try { return { targetKey: await realpath(displayPath) }; }
+        catch (error) { if (error.code === 'ENOENT') return { targetKey: displayPath }; throw error; }
+      },
+      processPath: target => target.targetKey,
+      processPathFromHostPath: path => path,
+      contains: (parent, child) => child.targetKey === parent.targetKey || child.targetKey.startsWith(parent.targetKey + '/'),
+      stat: async target => {
+        const { stat } = await import('node:fs/promises');
+        try { const value = await stat(target.targetKey); return { type: value.isDirectory() ? 'directory' : 'file' }; }
+        catch (error) { if (error.code === 'ENOENT') return; throw error; }
+      },
+      lstat: async (path, options = {}) => {
+        const { lstat } = await import('node:fs/promises');
+        try { const value = await lstat(resolvePath(options.cwd ?? work, path));
+          return { type: value.isSymbolicLink() ? 'symlink' : value.isDirectory() ? 'directory' : 'file' }; }
+        catch (error) { if (error.code === 'ENOENT') return; throw error; }
+      },
+    }, sandboxPolicy: { resolve: () => ({ mode: 'workspace-write', workspaceRoot: work }) } };
+    const scope = { session: { header: { cwd: work } } };
+    await rejectsCode(owner.rename(scope, work, 'directory', 'renamed'), 'file-write/protected-root');
+    await rejectsCode(owner.rename(scope, '../outside', 'directory', 'else'), 'file-write/outside-workspace');
+    await rejectsCode(owner.rename(scope, 'outside-link', 'directory', 'else'), 'file-write/outside-workspace');
+    await rejectsCode(owner.rename(scope, 'inside-link', 'directory', 'else'), 'file-write/stale-entry');
+    await rejectsCode(owner.rename(scope, 'a.md', 'directory', 'else'), 'file-write/stale-entry');
+    await rejectsCode(owner.rename(scope, 'a.md', 'file', '../escape'), 'gateway/bad-request');
+    await rejectsCode(owner.rename(scope, 'a.md', 'file', 'a.md'), 'file-write/same-name');
+    await rejectsCode(owner.rename(scope, 'a.md', 'file', 'b.md'), 'file-write/already-exists');
+    await rejectsCode(owner.rename(scope, 'a.md', 'file', 'outside-link'), 'file-write/already-exists');
+    assert.equal(await (await import('node:fs/promises')).readFile(join(work, 'b.md'), 'utf8'), 'existing');
+    assert.deepEqual(await owner.rename(scope, 'a.md', 'file', 'renamed.md'), {
+      absolutePath: join(await realpath(work), 'renamed.md'), previousPath: join(await realpath(work), 'a.md'), kind: 'file',
+    });
+    assert.equal(await (await import('node:fs/promises')).readFile(join(work, 'renamed.md'), 'utf8'), 'original');
+    await owner.rename(scope, 'nested', 'directory', 'moved');
+    assert.equal(await (await import('node:fs/promises')).readFile(join(work, 'moved', 'child.txt'), 'utf8'), 'child');
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('trash move confines files and folders and never moves outside-workspace entries', async () => {
