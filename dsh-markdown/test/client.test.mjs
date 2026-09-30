@@ -66,11 +66,18 @@ function heading(text, level) {
   }
 }
 
-function renderTree(element) {
+function renderTree(element, layout = {}) {
   if (element == null || typeof element !== 'object') return element
   const { type, props, children } = element
-  if (typeof type === 'function') return renderTree(type({ ...props, children }))
-  return { type, props, children: (children ?? []).flat().map(renderTree) }
+  if (typeof type === 'function') return renderTree(type({ ...props, children }), layout)
+  const rendered = { type, props, children: (children ?? []).flat().map(child => renderTree(child, layout)) }
+  if (type === 'nav' && layout.nav) Object.assign(rendered, layout.nav)
+  if (props?.['data-dsh-markdown-toc-item'] && props['aria-current'] === 'location' && layout.activeEntry) {
+    Object.assign(rendered, layout.activeEntry)
+  }
+  if (type === 'button' && props?.['data-dsh-markdown-toc-item']) rendered.parentElement = layout.navElement
+  if (typeof props?.ref === 'function') props.ref(rendered)
+  return rendered
 }
 
 function mockHooks() {
@@ -147,6 +154,49 @@ test('builds a visible TOC and navigates to a heading', () => {
   assert.equal(button.children[1], null)
   assert.equal(first.id, '')
   void second
+})
+
+test('centers the active TOC entry when reading down the document', () => {
+  const hooks = mockHooks()
+  const first = heading('Overview', 1)
+  const second = heading('Details', 2)
+  first.getBoundingClientRect = () => ({ top: -500 })
+  second.getBoundingClientRect = () => ({ top: 80 })
+  const { preview, body } = markdownPreview([first, second])
+  body.scrollHeight = 2000
+  body.clientHeight = 300
+  body.scrollTop = 700
+  body.getBoundingClientRect = () => ({ top: 0 })
+  body.addEventListener = () => {}
+  body.removeEventListener = () => {}
+  const { components } = loadPlugin(hooks)
+  const [, action] = [...components][0]
+  hooks.states[2] = preview
+  hooks.render(action, { absolutePath: '/tmp/a.md' })
+  hooks.runEffects()
+
+  const button = hooks.render(action, { absolutePath: '/tmp/a.md' })
+  const nav = {
+    scrollTop: 300,
+    clientHeight: 200,
+    getBoundingClientRect() { return { top: 100 } },
+  }
+  const panel = renderTree(button.children[1].child, {
+    navElement: nav,
+    nav: { scrollTop: 300, clientHeight: 200, getBoundingClientRect: () => ({ top: 100 }) },
+    activeEntry: { getBoundingClientRect: () => ({ top: 260, height: 20 }) },
+  })
+  const TocPanel = button.children[1].child.type
+  const tocProps = button.children[1].child.props
+  tocProps.items = tocProps.items.map((item, index) => ({ ...item, node: { ...item.node, index } }))
+  const activeEntry = { parentElement: nav, getBoundingClientRect: () => ({ top: 260, height: 20 }) }
+  hooks.render(TocPanel, tocProps)
+  hooks.refs[0].current = activeEntry
+  hooks.runEffects()
+  assert.equal(nav.scrollTop, 300 + (260 - 100) + (20 - 200) / 2)
+  assert.equal(body.scrollTop, 700)
+  void panel
+  hooks.cleanup()
 })
 
 test('persists visibility changes', () => {

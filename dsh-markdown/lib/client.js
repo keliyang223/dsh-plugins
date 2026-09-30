@@ -109,10 +109,12 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         const entry = activeRef.current
         if (!entry) return
+        // Scroll only the TOC list, not the document preview, and keep the
+        // current section near the middle instead of pinning it to the bottom.
         const nav = entry.parentElement
-        if (entry.offsetTop < nav.scrollTop || entry.offsetTop + entry.offsetHeight > nav.scrollTop + nav.clientHeight) {
-          entry.scrollIntoView?.({ block: 'nearest' })
-        }
+        const entryRect = entry.getBoundingClientRect()
+        const navRect = nav.getBoundingClientRect()
+        nav.scrollTop += entryRect.top - navRect.top + (entryRect.height - nav.clientHeight) / 2
       }, [active])
       return h('aside', {
         'data-dsh-markdown-toc': '',
