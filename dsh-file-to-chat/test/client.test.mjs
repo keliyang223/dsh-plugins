@@ -452,6 +452,58 @@ test('prefetched Markdown list source is mapped synchronously at right-click', a
   assert.equal(menu.items[0].text, `${path} 第 5 行 `)
 })
 
+test('numbered Markdown heading plus paragraph maps to source lines even when the selection ends at the next code block', async () => {
+  const path = '/tmp/stage0.md'
+  const source = [
+    '## 6. 第四步：Close 不是 Flush', '', 'Close 本身不会导致 Flush。', '', '---', '',
+    '## 7. 一个完整、可运行的阶段 0 示例', '',
+    '下面的程序完成：创建数据库 → 写入 → 读取 → 关闭。', '',
+    '```go', 'package main', '```', '',
+  ].join('\n')
+  const heading = { tagName: 'H2', textContent: '7. 一个完整、可运行的阶段 0 示例' }
+  const paragraph = { tagName: 'P', textContent: '下面的程序完成：创建数据库 → 写入 → 读取 → 关闭。' }
+  const startNode = { nodeType: 3, parentElement: { closest: () => heading } }
+  const codeText = { nodeType: 3, parentElement: { closest: () => null } }
+  const codeBlock = { contains: (node) => node === codeText, querySelector: () => ({ textContent: 'package main\n' }) }
+  const markdown = {
+    contains: (item) => item === heading || item === paragraph,
+    querySelectorAll: (selector) => selector === '[data-code-block-content]' ? [codeBlock] : [heading, paragraph],
+  }
+  const body = { contains: (item) => item === startNode || item === codeText, querySelector: () => markdown }
+  const preview = {
+    querySelector: (selector) => selector === '[data-textpreview-body]' ? body :
+      selector === '[data-textpreview-path]' ? { getAttribute: () => path } : null,
+    getBoundingClientRect: () => ({ left: 20, bottom: 50 }),
+  }
+  const selection = { isCollapsed: false, rangeCount: 1, getRangeAt: () => ({
+    startContainer: startNode, startOffset: 0, endContainer: codeText, endOffset: 0,
+    intersectsNode: (node) => node === heading || node === paragraph || node === codeBlock,
+    toString: () => '7. 一个完整、可运行的阶段 0 示例\n下面的程序完成：创建数据库 → 写入 → 读取 → 关闭。\n',
+  }) }
+  let menu
+  const effects = []
+  const listeners = new Map()
+  const { components } = loadPlugin({
+    getSelection: () => selection,
+    useRef: () => ({ current: { closest: () => preview } }),
+    useState: (initial) => [initial, (value) => { menu = value }],
+    useEffect: (effect) => { effects.push(effect) },
+    addDocumentListener: (name, handler) => { listeners.set(name, handler) },
+    fetch: async () => ({ ok: true, headers: { get: () => null }, text: async () => source }),
+  })
+  components.get('sidebar.right.tab.document.actions')({ absolutePath: path })
+  effects[0]()
+  components.get('conversation.input.dock')({ inputActions: { captureInsertion: () => ({}) } })
+  effects[1]()
+  await new Promise((resolve) => setImmediate(resolve))
+  listeners.get('contextmenu')({
+    target: { closest: (selector) => selector === '[data-textpreview-url]' ? preview : null },
+    clientX: 20, clientY: 40, preventDefault() {}, stopPropagation() {},
+  })
+  assert.equal(menu.label, '加入选中行到对话框')
+  assert.equal(menu.items[0].text, `${path} 第 7–9 行 `)
+})
+
 test('ambiguous repeated Markdown blocks do not invent a source line', async () => {
   const path = '/tmp/duplicate.md'
   const paragraph = { tagName: 'P', textContent: 'Repeated paragraph' }

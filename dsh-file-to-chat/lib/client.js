@@ -113,12 +113,36 @@ window.__ModuleLoader__.load({
 
     function blockFor(node, markdown) {
       const element = node?.nodeType === 3 ? node.parentElement : node
-      const block = element?.closest?.('p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th')
+      const block = element?.closest?.(BLOCK_SELECTOR)
       return block && markdown.contains(block) ? block : null
     }
 
+    // Triple-click (or dragging to a line end) often puts the range end at
+    // offset 0 of the NEXT element, e.g. the following code block. Use the
+    // last block that actually contributes selected text instead.
+    function lastSelectedBlock(range, markdown, first) {
+      const last = blockFor(range.endContainer, markdown)
+      if (last && (last === first || range.endOffset !== 0)) return last
+      const blocks = [...(markdown.querySelectorAll?.(BLOCK_SELECTOR) ?? [])]
+        .filter((block) => block !== last && range.intersectsNode?.(block))
+      return blocks.length ? blocks[blocks.length - 1] : last
+    }
+
+    // Rendered text has already lost its Markdown markers. Re-running the
+    // source prefix stripping on it would turn a heading like "7. Example"
+    // into "Example" and never match the source line "## 7. Example".
+    function normalizeRenderedText(value) {
+      return value
+        .replace(/<[^>]+>/gu, '')
+        .replace(/[*_~]/gu, '')
+        .replace(/\s+/gu, ' ')
+        .trim()
+    }
+
+    const BLOCK_SELECTOR = 'p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th'
+
     function sourceBlock(source, block) {
-      const text = normalizeSourceText(block.textContent || '')
+      const text = normalizeRenderedText(block.textContent || '')
       if (!text || text.length < 3 || /^(?:td|th)$/iu.test(block.tagName || '')) return null
       const lines = source.split(/\r\n|\r|\n/u)
       const matches = []
@@ -143,7 +167,7 @@ window.__ModuleLoader__.load({
       const source = sourceFor(preview)
       if (source === null || !range.toString().trim()) return null
       const first = blockFor(range.startContainer, markdown)
-      const last = blockFor(range.endContainer, markdown)
+      const last = first && lastSelectedBlock(range, markdown, first)
       if (!first || !last) return null
       const start = sourceBlock(source, first)
       const end = first === last ? start : sourceBlock(source, last)
@@ -204,8 +228,9 @@ window.__ModuleLoader__.load({
       }
       const markdown = body.querySelector('[data-document-markdown]')
       if (markdown) {
+        const endsAtStartOf = (node) => range.endOffset === 0 && node.contains(range.endContainer) && !node.contains(range.startContainer)
         const code = [...markdown.querySelectorAll('[data-code-block-content]')]
-          .find((node) => node.contains(range.startContainer) || node.contains(range.endContainer) || range.intersectsNode(node))
+          .find((node) => !endsAtStartOf(node) && (node.contains(range.startContainer) || node.contains(range.endContainer) || range.intersectsNode(node)))
         // Markdown prose has no line metadata; map its selected text to source.
         return code ? sourceLinesForMarkdownCode(preview, code, range) : sourceLinesForSelection(preview, range, markdown)
       }
