@@ -1,0 +1,16 @@
+dsh-file-to-chat/lib/client.js
+  h_6ee620acf9166c 116,120-143,145,170,231,233
+dsh-file-to-chat/test/client.test.mjs
+  h_6ee620acf9166c 453-504
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "95ee178b1ef3e0563691b61b22a7002eb1b6eb96",
+  "prompts": {},
+  "humans": {
+    "h_6ee620acf9166c": {
+      "author": "keliyang <keliyang@zuoyebang.com>"
+    }
+  }
+}
