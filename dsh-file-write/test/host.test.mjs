@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { posix, resolve as resolvePath } from 'node:path';
-import { mkdtemp, writeFile, mkdir, symlink, access, rm, realpath } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, mkdir, symlink, access, rm, realpath, stat, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol';
@@ -97,7 +97,7 @@ test('Host registers session lookup and marks create/save for SRC discovery', ()
   const service = new FileWrite(ctx);
   assert.equal(service.typertRemote.serviceKey, 'fileWrite');
   assert.equal(service.typertRemote.namespace, 'fileWrite');
-  assert.deepEqual(remoteMethods(service).map(({ method }) => method), ['create', 'createDirectory', 'save', 'delete', 'rename']);
+  assert.deepEqual(remoteMethods(service).map(({ method }) => method), ['create', 'createDirectory', 'save', 'delete', 'rename', 'beginUpload', 'appendUpload', 'finishUpload', 'cancelUpload', 'trashPlatform']);
   assert.equal(lookup.key, 'dsh-file-write.session');
   assert.equal(lookup.provider.parameter, 'fileWriteSession');
   assert.equal(lookup.provider.wire, 'sessionId');
@@ -107,6 +107,16 @@ test('Host registers session lookup and marks create/save for SRC discovery', ()
   assert.match(FileWrite.prototype.save.toString(), /save\(fileWriteSession, path, text, expectedVersion, signal\)/);
   assert.match(FileWrite.prototype.delete.toString(), /delete\(fileWriteSession, path, kind, signal\)/);
   assert.match(FileWrite.prototype.rename.toString(), /rename\(fileWriteSession, path, kind, basename, signal\)/);
+  assert.equal(FileWrite.prototype.trashPlatform.toString().includes('trashPlatform(fileWriteSession)'), true);
+  for (const [method, args] of [['beginUpload', 'directory, basename, size'], ['appendUpload', 'token, chunkBase64'], ['finishUpload', 'token'], ['cancelUpload', 'token']]) {
+    assert.ok(FileWrite.prototype[method].toString().includes(`${method}(fileWriteSession, ${args}, signal)`));
+  }
+});
+
+test('trash platform identifies the Host operating system for a live session', async () => {
+  const { owner, scope } = fixture();
+  assert.deepEqual(await owner.trashPlatform(scope), { platform: process.platform });
+  await rejectsCode(owner.trashPlatform({}), 'gateway/bad-request');
 });
 
 test('create is confined and exclusive, and returns a versioned stat', async () => {
@@ -367,4 +377,130 @@ test('delete refuses a nonlocal filesystem backend', async () => {
 test('rejects content with unpaired surrogate instead of corrupting UTF-8', async () => {
   const { owner, scope } = fixture();
   await rejectsCode(owner.create(scope, 'sub', 'new.txt', '\ud800'), 'file-write/not-text');
+});
+
+async function uploadFixture(run) {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-file-write-upload-test-'));
+  const work = join(root, 'work');
+  const outside = join(root, 'outside');
+  await mkdir(join(work, 'sub'), { recursive: true });
+  await mkdir(outside);
+  const owner = Object.create(FileWrite.prototype);
+  owner.ctx = {
+    fs: {
+      processPathFromHostPath: path => path,
+      processPath: target => target.targetKey,
+      contains: (parent, child) => child.targetKey === parent.targetKey || child.targetKey.startsWith(parent.targetKey + '/'),
+      resolve: async (path, options = {}) => {
+        options.signal?.throwIfAborted();
+        const full = resolvePath(options.cwd ?? work, path);
+        try { return { targetKey: await realpath(full) }; }
+        catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+          const parent = await realpath(resolvePath(full, '..'));
+          return { targetKey: join(parent, full.split('/').at(-1)) };
+        }
+      },
+      stat: async target => {
+        try { const value = await stat(target.targetKey); return { type: value.isDirectory() ? 'directory' : 'file' }; }
+        catch (error) { if (error.code === 'ENOENT') return; throw error; }
+      },
+      lstat: async path => {
+        try { const value = await lstat(path); return { type: value.isSymbolicLink() ? 'symlink' : value.isDirectory() ? 'directory' : 'file' }; }
+        catch (error) { if (error.code === 'ENOENT') return; throw error; }
+      },
+    },
+    sandboxPolicy: { resolve: () => ({ mode: 'workspace-write', workspaceRoot: work }) },
+  };
+  const scope = { session: { id: 's1', header: { cwd: work } } };
+  try { await run({ root, work, outside, owner, scope }); }
+  finally { await rm(root, { recursive: true, force: true }); }
+}
+
+test('binary upload accepts multiple chunks and files, including empty and 1 MiB chunks', async () => {
+  await uploadFixture(async ({ work, owner, scope }) => {
+    const chunk = Buffer.alloc(1024 * 1024, 255);
+    const first = await owner.beginUpload(scope, 'sub', 'binary.dat', chunk.length + 3);
+    assert.match(first.token, /^[a-f0-9]{64}$/);
+    assert.equal(first.maxChunkBytes, chunk.length);
+    assert.deepEqual(await owner.appendUpload(scope, first.token, chunk.toString('base64')), { bytes: chunk.length });
+    assert.deepEqual(await owner.appendUpload(scope, first.token, Buffer.from([0, 1, 254]).toString('base64')), { bytes: chunk.length + 3 });
+    assert.deepEqual(await owner.finishUpload(scope, first.token), { absolutePath: join(await realpath(work), 'sub', 'binary.dat'), bytes: chunk.length + 3 });
+    assert.deepEqual(await readFile(join(work, 'sub', 'binary.dat')), Buffer.concat([chunk, Buffer.from([0, 1, 254])]));
+    const second = await owner.beginUpload(scope, 'sub', 'empty.dat', 0);
+    assert.notEqual(first.token, second.token);
+    assert.deepEqual(await owner.finishUpload(scope, second.token), { absolutePath: join(await realpath(work), 'sub', 'empty.dat'), bytes: 0 });
+    assert.equal((await stat(join(work, 'sub', 'empty.dat'))).size, 0);
+    await rejectsCode(owner.finishUpload(scope, first.token), 'file-write/invalid-upload');
+  });
+});
+
+test('upload rejects limits, invalid chunks, session tokens, and cleans failed or cancelled uploads', async () => {
+  await uploadFixture(async ({ work, owner, scope }) => {
+    for (const size of [-1, 0.5, NaN, '1']) await rejectsCode(owner.beginUpload(scope, 'sub', 'x', size), 'gateway/bad-request');
+    await rejectsCode(owner.beginUpload(scope, 'sub', 'x', 512 * 1024 * 1024 + 1), 'file-write/too-large');
+    await rejectsCode(owner.beginUpload(scope, '../outside', 'x', 1), 'file-write/outside-workspace');
+    await rejectsCode(owner.beginUpload(scope, 'sub', '../x', 1), 'gateway/bad-request');
+    await rejectsCode(owner.beginUpload(scope, 'missing', 'x', 1), 'file-write/not-directory');
+    await writeFile(join(work, 'sub', 'exists'), 'keep');
+    await rejectsCode(owner.beginUpload(scope, 'sub', 'exists', 1), 'file-write/already-exists');
+    const first = await owner.beginUpload(scope, 'sub', 'x', 1);
+    const stranger = { session: { id: scope.session.id, header: scope.session.header } };
+    await rejectsCode(owner.appendUpload(stranger, first.token, 'AA=='), 'file-write/invalid-upload');
+    await rejectsCode(owner.cancelUpload(stranger, first.token), 'file-write/invalid-upload');
+    await rejectsCode(owner.appendUpload(scope, first.token, 'AA==AA=='), 'gateway/bad-request');
+    await rejectsCode(owner.finishUpload(scope, first.token), 'file-write/invalid-upload');
+    await assert.rejects(access(join(work, 'sub', 'x')), { code: 'ENOENT' });
+    const big = await owner.beginUpload(scope, 'sub', 'big', 512 * 1024 * 1024);
+    await rejectsCode(owner.appendUpload(scope, big.token, Buffer.alloc(1024 * 1024 + 1).toString('base64')), 'file-write/too-large');
+    const over = await owner.beginUpload(scope, 'sub', 'over', 1);
+    await rejectsCode(owner.appendUpload(scope, over.token, 'AAAA'), 'file-write/too-large');
+    const incomplete = await owner.beginUpload(scope, 'sub', 'incomplete', 2);
+    await owner.appendUpload(scope, incomplete.token, 'AA==');
+    await rejectsCode(owner.finishUpload(scope, incomplete.token), 'file-write/incomplete-upload');
+    const cancelled = await owner.beginUpload(scope, 'sub', 'cancelled', 1);
+    const temporary = owner.uploadStore().get(cancelled.token).tempDir;
+    assert.deepEqual(await owner.cancelUpload(scope, cancelled.token), { cancelled: true });
+    await assert.rejects(access(temporary), { code: 'ENOENT' });
+    await rejectsCode(owner.appendUpload(scope, cancelled.token, 'AA=='), 'file-write/invalid-upload');
+    const expired = await owner.beginUpload(scope, 'sub', 'expired', 0);
+    owner.uploadStore().get(expired.token).expiresAt = 0;
+    await rejectsCode(owner.finishUpload(scope, expired.token), 'file-write/upload-expired');
+    const aborted = await owner.beginUpload(scope, 'sub', 'aborted', 1);
+    await assert.rejects(owner.appendUpload(scope, aborted.token, 'AA==', AbortSignal.abort()), { name: 'AbortError' });
+    await rejectsCode(owner.finishUpload(scope, aborted.token), 'file-write/invalid-upload');
+  });
+});
+
+test('finish rechecks live policy and parent, and never overwrites existing files or symlinks', async () => {
+  await uploadFixture(async ({ work, outside, owner, scope }) => {
+    const upload = async basename => {
+      const started = await owner.beginUpload(scope, 'sub', basename, 1);
+      await owner.appendUpload(scope, started.token, 'AA==');
+      return started.token;
+    };
+    const policy = await upload('policy');
+    owner.ctx.sandboxPolicy.resolve = () => ({ mode: 'read-only', workspaceRoot: work });
+    await rejectsCode(owner.finishUpload(scope, policy), 'file-write/policy-denied');
+    owner.ctx.sandboxPolicy.resolve = () => ({ mode: 'workspace-write', workspaceRoot: work });
+    const collision = await upload('collision');
+    await writeFile(join(work, 'sub', 'collision'), 'untouched');
+    await rejectsCode(owner.finishUpload(scope, collision), 'file-write/already-exists');
+    assert.equal(await readFile(join(work, 'sub', 'collision'), 'utf8'), 'untouched');
+    const link = await upload('link');
+    await writeFile(join(outside, 'victim'), 'untouched');
+    await symlink(join(outside, 'victim'), join(work, 'sub', 'link'));
+    await rejectsCode(owner.finishUpload(scope, link), 'file-write/already-exists');
+    assert.equal(await readFile(join(outside, 'victim'), 'utf8'), 'untouched');
+    const shifted = await upload('shifted');
+    await (await import('node:fs/promises')).rename(join(work, 'sub'), join(work, 'old-sub'));
+    await symlink(outside, join(work, 'sub'));
+    await rejectsCode(owner.finishUpload(scope, shifted), 'file-write/outside-workspace');
+    await assert.rejects(access(join(outside, 'shifted')), { code: 'ENOENT' });
+    await rm(join(work, 'sub'));
+    await symlink(join(work, 'old-sub'), join(work, 'sub'));
+    await rejectsCode(owner.beginUpload(scope, 'sub', 'symlink-parent', 0), 'file-write/stale-entry');
+    delete owner.ctx.fs.processPathFromHostPath;
+    await rejectsCode(owner.beginUpload(scope, 'old-sub', 'unsupported', 0), 'file-write/unsupported-backend');
+  });
 });

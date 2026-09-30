@@ -38,6 +38,8 @@ window.__ModuleLoader__.load({
         createDirectory: 'M3 7V5a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v2M3 7h18l-1.5 12a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2L3 7Zm9 4v6m-3-3h6',
         delete: 'M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v6m4-6v6',
         rename: 'M4 20h4l11-11-4-4L4 16v4Zm9-13 4 4M4 20h16',
+        upload: 'M12 16V3m-4 4 4-4 4 4M4 17v3h16v-3',
+        paste: 'M8 4h2a2 2 0 0 1 4 0h2v3H8V4ZM6 7H5v14h14V7h-1',
       }[kind]
       return h('svg', {
         'aria-hidden': true, viewBox: '0 0 24 24', width: 16, height: 16,
@@ -236,13 +238,99 @@ window.__ModuleLoader__.load({
       const [dialog, setDialog] = useState(null)
       const [deleting, setDeleting] = useState(null)
       const [renaming, setRenaming] = useState(null)
+      const [trashName, setTrashName] = useState('废纸篓')
+      const trashAction = `移到${trashName}`
+      const [transfer, setTransfer] = useState(null)
       const [name, setName] = useState('')
       const [error, setError] = useState('')
       const [pending, setPending] = useState(false)
       const bridgeSeen = useRef(new WeakSet())
       const abortRef = useRef(null)
+      const inputRef = useRef(null)
+      const selectedDirectory = useRef(null)
+      const transferRef = useRef(null)
+      transferRef.current = transfer
       const mounted = useRef(true)
       useEffect(() => () => { mounted.current = false; abortRef.current?.abort() }, [])
+      function chooseFiles(directory) {
+        selectedDirectory.current = directory
+        setMenu(null)
+        if (transferRef.current?.busy) return
+        if (inputRef.current) { inputRef.current.value = ''; inputRef.current.click() }
+      }
+      function filesFromClipboard(data) {
+        const items = Array.from(data?.items || []).filter(item => item.kind === 'file').map(item => item.getAsFile()).filter(Boolean)
+        return items.length ? items : Array.from(data?.files || [])
+      }
+      async function importFiles(directory, files) {
+        if (transferRef.current?.busy || !directory || !files.length) return
+        const controller = new AbortController()
+        abortRef.current = controller
+        let completed = 0
+        const failures = []
+        const state = { directory, busy: true, message: `正在添加 0/${files.length} 个文件…`, failures: [] }
+        transferRef.current = state
+        setTransfer(state)
+        try {
+          for (const file of files) {
+            if (controller.signal.aborted) break
+            let token
+            try {
+              if (!basenameValid(file.name) || !Number.isSafeInteger(file.size) || file.size > 512 * 1024 * 1024) {
+                throw new Error('无效文件名或文件超过 512 MiB')
+              }
+              const started = valueOf(await fileWrite.beginUpload(sessionId, directory, file.name, file.size, controller.signal))
+              token = started?.token
+              if (!token) throw new Error('上传服务未返回令牌；请重启 DSH Web 宿主')
+              for (let offset = 0; offset < file.size; offset += 256 * 1024) {
+                controller.signal.throwIfAborted()
+                const bytes = new Uint8Array(await file.slice(offset, offset + 256 * 1024).arrayBuffer())
+                let binary = ''
+                for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192))
+                valueOf(await fileWrite.appendUpload(sessionId, token, btoa(binary), controller.signal))
+              }
+              valueOf(await fileWrite.finishUpload(sessionId, token, controller.signal))
+              token = null
+              completed++
+            } catch (failure) {
+              if (!controller.signal.aborted) failures.push(`${file.name}: ${failureMessage(failure)}`)
+            } finally {
+              if (token) { try { await fileWrite.cancelUpload(sessionId, token) } catch { /* Staging expires on the Host. */ } }
+            }
+            if (mounted.current && !controller.signal.aborted) setTransfer({ directory, busy: true,
+              message: `正在添加 ${completed + failures.length}/${files.length} 个文件…`, failures: [...failures] })
+          }
+        } finally {
+          const result = { directory, busy: false, message: controller.signal.aborted
+            ? `已取消；成功 ${completed} 个文件。` : `成功 ${completed} 个，失败 ${failures.length} 个。`, failures }
+          transferRef.current = result
+          if (mounted.current) {
+            setTransfer(result)
+            if (completed) document.querySelector('[data-files-state="tree"] [data-files-reload]')?.click()
+          }
+          if (abortRef.current === controller) abortRef.current = null
+        }
+      }
+      function pasteInto(directory) {
+        selectedDirectory.current = directory
+        setMenu(null)
+        if (typeof navigator === 'undefined' || !navigator.clipboard?.read) {
+          setTransfer({ directory, busy: false, message: '浏览器不支持读取文件剪贴板。请按 Cmd/Ctrl+V，或使用“添加文件”。', failures: [] })
+          return
+        }
+        navigator.clipboard.read().then(async items => {
+          const files = []
+          for (const item of items) for (const type of item.types) {
+            if (type.startsWith('image/')) {
+              const blob = await item.getType(type)
+              files.push(new File([blob], `粘贴图片-${Date.now()}.${type.split('/')[1] || 'png'}`, { type }))
+            }
+          }
+          if (files.length) await importFiles(directory, files)
+          else setTransfer({ directory, busy: false, message: '剪贴板没有浏览器可读取的文件；请使用“添加文件”或拖放。', failures: [] })
+        }).catch(failure => setTransfer({ directory, busy: false,
+          message: `无法读取剪贴板：${failureMessage(failure)}。请按 Cmd/Ctrl+V 或使用“添加文件”。`, failures: [] }))
+      }
       function openCreate(directory, kind = 'file') {
         setMenu(null)
         setDialog({ directory, kind })
@@ -269,10 +357,12 @@ window.__ModuleLoader__.load({
           if (target.kind === 'directory') {
             detail.items.push({ label: '新建文件', icon: 'createFile', onClick: () => openCreate(target.path) })
             detail.items.push({ label: '新建文件夹', icon: 'createDirectory', onClick: () => openCreate(target.path, 'directory') })
+            detail.items.push({ label: '添加文件…', icon: 'upload', onClick: () => chooseFiles(target.path) })
+            detail.items.push({ label: '粘贴', icon: 'paste', onClick: () => pasteInto(target.path) })
           }
           if (target.kind === 'directory' || target.kind === 'file') {
             detail.items.push({ label: '重命名', icon: 'rename', onClick: () => openRename(target) })
-            detail.items.push({ label: '移到废纸篓', icon: 'delete', onClick: () => openDelete(target) })
+            detail.items.push({ label: trashAction, icon: 'delete', onClick: () => openDelete(target) })
           }
         }
         function onContextMenu(event) {
@@ -282,7 +372,7 @@ window.__ModuleLoader__.load({
           // bubble only runs when no other menu handled this tree event.
           event.preventDefault()
           setMenu({ target, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 170)),
-            y: Math.max(8, Math.min(event.clientY, window.innerHeight - (target.kind === 'directory' ? 160 : 115))) })
+            y: Math.max(8, Math.min(event.clientY, window.innerHeight - (target.kind === 'directory' ? 225 : 115))) })
         }
         document.addEventListener('dsh-file-tree-menu', onBridge)
         document.addEventListener('contextmenu', onContextMenu)
@@ -290,7 +380,61 @@ window.__ModuleLoader__.load({
           document.removeEventListener('dsh-file-tree-menu', onBridge)
           document.removeEventListener('contextmenu', onContextMenu)
         }
-      }, [])
+      }, [trashAction])
+      useEffect(() => {
+        function select(event) {
+          const target = treeTarget(event)
+          if (target?.kind === 'directory' || target?.kind === 'root') selectedDirectory.current = target.path
+        }
+        function paste(event) {
+          const target = event.target
+          if (target?.closest?.('input,textarea,[contenteditable="true"],[role="textbox"]')) return
+          const tree = target?.closest?.('[data-files-state="tree"]')
+          const directory = (treeTarget(event)?.kind === 'directory' ? treeTarget(event).path : null) ||
+            (tree && selectedDirectory.current)
+          if (!directory) return
+          const files = filesFromClipboard(event.clipboardData)
+          if (!files.length) {
+            if (tree) setTransfer({ directory, busy: false, message: '剪贴板未提供可读取的文件；请使用“添加文件”或拖放。', failures: [] })
+            return
+          }
+          event.preventDefault()
+          void importFiles(directory, files)
+        }
+        function dragover(event) {
+          const target = treeTarget(event)
+          if (target?.kind === 'directory' && Array.from(event.dataTransfer?.types || []).includes('Files')) event.preventDefault()
+        }
+        function drop(event) {
+          const target = treeTarget(event)
+          if (target?.kind !== 'directory') return
+          const files = Array.from(event.dataTransfer?.files || [])
+          if (!files.length) return
+          event.preventDefault()
+          selectedDirectory.current = target.path
+          void importFiles(target.path, files)
+        }
+        document.addEventListener('click', select, true)
+        document.addEventListener('paste', paste)
+        document.addEventListener('dragover', dragover)
+        document.addEventListener('drop', drop)
+        return () => {
+          document.removeEventListener('click', select, true)
+          document.removeEventListener('paste', paste)
+          document.removeEventListener('dragover', dragover)
+          document.removeEventListener('drop', drop)
+        }
+      }, [sessionId])
+      useEffect(() => {
+        if (!sessionId || !fileWrite?.trashPlatform) return
+        const controller = new AbortController()
+        Promise.resolve().then(() => fileWrite.trashPlatform(sessionId, controller.signal)).then(response => {
+          if (!controller.signal.aborted && mounted.current) {
+            setTrashName(valueOf(response)?.platform === 'win32' ? '回收站' : '废纸篓')
+          }
+        }).catch(() => { /* Keep the fallback if the Host is not yet updated. */ })
+        return () => controller.abort()
+      }, [sessionId, fileWrite])
       useEffect(() => {
         if (!menu) return
         const dismiss = (event) => { if (!event.target?.closest?.('[data-file-write-menu]')) setMenu(null) }
@@ -373,13 +517,15 @@ window.__ModuleLoader__.load({
           setDeleting(null)
           document.querySelector('[data-files-state="tree"] [data-files-reload]')?.click()
         } catch (failure) {
-          if (mounted.current && !controller.signal.aborted) setError(failure?.message || '移到废纸篓失败，原文件未自动删除。')
+          if (mounted.current && !controller.signal.aborted) setError(failure?.message || `${trashAction}失败，原文件未自动删除。`)
         } finally {
           if (mounted.current) setPending(false)
           if (abortRef.current === controller) abortRef.current = null
         }
       }
       return h('span', { 'data-file-write-tree-contribution': '', style: { display: 'none' } },
+        h('input', { type: 'file', multiple: true, ref: inputRef, 'data-file-write-file-input': '',
+          onChange(event) { const files = Array.from(event.target.files || []); if (files.length) void importFiles(selectedDirectory.current, files) } }),
         menu && createPortal(h('div', {
           role: 'menu', 'aria-label': '文件操作', 'data-file-write-menu': '',
           style: { position: 'fixed', zIndex: 2147483647, top: menu.y, left: menu.x,
@@ -392,12 +538,18 @@ window.__ModuleLoader__.load({
         menu.target.kind === 'directory' && h('button', {
           type: 'button', role: 'menuitem', style: menuButtonStyle,
           onClick: () => openCreate(menu.target.path, 'directory') }, menuIcon('createDirectory'), h('span', null, '新建文件夹')),
+        menu.target.kind === 'directory' && h('button', {
+          type: 'button', role: 'menuitem', style: menuButtonStyle,
+          onClick: () => chooseFiles(menu.target.path) }, menuIcon('upload'), h('span', null, '添加文件…')),
+        menu.target.kind === 'directory' && h('button', {
+          type: 'button', role: 'menuitem', style: menuButtonStyle,
+          onClick: () => pasteInto(menu.target.path) }, menuIcon('paste'), h('span', null, '粘贴')),
         (menu.target.kind === 'directory' || menu.target.kind === 'file') && h('button', {
           type: 'button', role: 'menuitem', autoFocus: menu.target.kind === 'file', style: menuButtonStyle,
           onClick: () => openRename(menu.target) }, menuIcon('rename'), h('span', null, '重命名')),
         (menu.target.kind === 'directory' || menu.target.kind === 'file') && h('button', {
           type: 'button', role: 'menuitem', style: menuButtonStyle,
-          onClick: () => openDelete(menu.target) }, menuIcon('delete'), h('span', null, '移到废纸篓'))), document.body),
+          onClick: () => openDelete(menu.target) }, menuIcon('delete'), h('span', null, trashAction))), document.body),
         dialog !== null && createPortal(h('div', {
           role: 'presentation', 'data-file-write-dialog': '',
           style: { position: 'fixed', inset: 0, zIndex: 2147483647, background: '#0008', display: 'grid', placeItems: 'center' },
@@ -433,21 +585,31 @@ window.__ModuleLoader__.load({
           h('button', { type: 'submit', style: createButtonStyle,
             disabled: pending || !basenameValid(name) || name === renaming.path.replace(/[\\/]+$/u, '').split(/[\\/]/u).at(-1),
             'data-file-write-rename': '' }, pending ? '重命名中…' : '重命名')))), document.body),
+        transfer && createPortal(h('div', { role: 'dialog', 'aria-label': '文件导入', 'data-file-write-transfer': '',
+          style: { position: 'fixed', zIndex: 2147483647, bottom: 20, right: 20, width: 'min(380px, 90vw)',
+            padding: 16, borderRadius: 8, background: 'var(--dsw-alias-bg-layer-2, #fff)',
+            color: 'var(--dsw-alias-label-primary, #222)', boxShadow: '0 4px 16px #0005' } },
+          h('strong', null, '添加文件'), h('p', { role: 'status' }, transfer.message),
+          transfer.failures.map((failure, index) => h('p', { key: index, role: 'alert', style: { color: '#c44' } }, failure)),
+          h('button', { type: 'button', style: buttonStyle, onClick: () => {
+            if (transfer.busy) abortRef.current?.abort()
+            else setTransfer(null)
+          } }, transfer.busy ? '取消上传' : '关闭')), document.body),
         deleting && createPortal(h('div', {
           role: 'presentation', 'data-file-write-delete-dialog': '',
           style: { position: 'fixed', inset: 0, zIndex: 2147483647, background: '#0008', display: 'grid', placeItems: 'center' },
-        }, h('form', { role: 'dialog', 'aria-modal': 'true', 'aria-label': '确认移到废纸篓', onSubmit: removeEntry,
+        }, h('form', { role: 'dialog', 'aria-modal': 'true', 'aria-label': `确认${trashAction}`, onSubmit: removeEntry,
           style: { display: 'flex', flexDirection: 'column', gap: 12, padding: 18, width: 'min(420px, 90vw)',
             background: 'var(--dsw-alias-bg-layer-2, #fff)', color: 'var(--dsw-alias-label-primary, #222)', borderRadius: 8 } },
-        h('strong', null, `将${deleting.kind === 'directory' ? '目录' : '文件'}移到废纸篓？`),
+        h('strong', null, `将${deleting.kind === 'directory' ? '目录' : '文件'}${trashAction}？`),
         h('small', { style: { overflowWrap: 'anywhere' } }, deleting.path),
-        h('span', null, deleting.kind === 'directory' ? '目录及其中所有内容将一起移入系统废纸篓（Windows 为回收站），可从中恢复。' : '文件将移入系统废纸篓（Windows 为回收站），可从中恢复。'),
+        h('span', null, deleting.kind === 'directory' ? `目录及其中所有内容将一起移入系统${trashName}，可从中恢复。` : `文件将移入系统${trashName}，可从中恢复。`),
         error && h('span', { role: 'alert', style: { color: '#c44' } }, error),
         h('div', { style: { display: 'flex', gap: 8, justifyContent: 'flex-end' } },
           h('button', { type: 'button', style: buttonStyle, disabled: pending,
             onClick: () => setDeleting(null) }, '取消'),
           h('button', { type: 'submit', style: trashButtonStyle, disabled: pending,
-            'data-file-write-delete': '' }, pending ? '移动中…' : '移到废纸篓')))), document.body))
+            'data-file-write-delete': '' }, pending ? '移动中…' : trashAction)))), document.body))
     }
 
     module.exports.inject = ['slots', 'documentPreviews', 'connection', 'remote', 'remote.workspaceFiles']
@@ -456,6 +618,10 @@ window.__ModuleLoader__.load({
       // This plugin's Host endpoints are not part of the generated Remote table.
       // Use the existing gateway connection, preserving its Result envelope.
       const fileWrite = {
+        trashPlatform(sessionId, signal) {
+          return ctx.connection.rpc.call('/api', 'fileWrite/trashPlatform',
+            { args: { sessionId: sessionId?.id || sessionId?.sessionId || sessionId } }, signal)
+        },
         create(sessionId, directory, basename, text, signal) {
           return ctx.connection.rpc.call('/api', 'fileWrite/create',
             { args: { sessionId: sessionId?.id || sessionId?.sessionId || sessionId, directory, basename, text } }, signal)
@@ -475,6 +641,18 @@ window.__ModuleLoader__.load({
         rename(sessionId, path, kind, basename, signal) {
           return ctx.connection.rpc.call('/api', 'fileWrite/rename',
             { args: { sessionId: sessionId?.id || sessionId?.sessionId || sessionId, path, kind, basename } }, signal)
+        },
+        beginUpload(sessionId, directory, basename, size, signal) {
+          return ctx.connection.rpc.call('/api', 'fileWrite/beginUpload', { args: { sessionId, directory, basename, size } }, signal)
+        },
+        appendUpload(sessionId, token, chunkBase64, signal) {
+          return ctx.connection.rpc.call('/api', 'fileWrite/appendUpload', { args: { sessionId, token, chunkBase64 } }, signal)
+        },
+        finishUpload(sessionId, token, signal) {
+          return ctx.connection.rpc.call('/api', 'fileWrite/finishUpload', { args: { sessionId, token } }, signal)
+        },
+        cancelUpload(sessionId, token) {
+          return ctx.connection.rpc.call('/api', 'fileWrite/cancelUpload', { args: { sessionId, token } })
         },
       }
       ctx.effect(() => ctx.documentPreviews.register({

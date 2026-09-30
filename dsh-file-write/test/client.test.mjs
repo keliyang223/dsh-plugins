@@ -55,7 +55,9 @@ function loadClient({ workspaceFiles, call = async () => ({ ok: true, value: { a
     useEffect(fn) { index++; effects.push(fn) },
   }
   const window = { innerWidth: 800, innerHeight: 600, __ModuleLoader__: { load(entry) { window.entry = entry } } }
-  runInNewContext(source, { window, document, TextDecoder, Uint8Array, ArrayBuffer, AbortController, WeakSet, console,
+  runInNewContext(source, { window, document, navigator: { clipboard: { read: async () => [] } },
+    File: class File { constructor(parts, name, options) { this.name = name; this.size = parts[0].size; this.type = options.type; this.slice = (...args) => parts[0].slice(...args) } },
+    btoa, TextDecoder, Uint8Array, ArrayBuffer, AbortController, WeakSet, console,
     setTimeout: (fn, delay) => { assert.equal(delay, 600); const id = ++nextTimer; timers.set(id, fn); return id },
     clearTimeout: (id) => timers.delete(id),
   })
@@ -311,8 +313,8 @@ test('bridges new-file menu item and calls exclusive create with chosen name', a
   const event = directoryEvent('/work/docs')
   const items = [{ label: '加入到对话框' }]
   client.document.dispatchEvent({ type: 'dsh-file-tree-menu', detail: { event, items } })
-  assert.deepEqual(items.map(item => item.label), ['加入到对话框', '新建文件', '新建文件夹', '重命名', '移到废纸篓'])
-  assert.deepEqual(items.slice(1).map(item => item.icon), ['createFile', 'createDirectory', 'rename', 'delete'])
+  assert.deepEqual(items.map(item => item.label), ['加入到对话框', '新建文件', '新建文件夹', '添加文件…', '粘贴', '重命名', '移到废纸篓'])
+  assert.deepEqual(items.slice(1).map(item => item.icon), ['createFile', 'createDirectory', 'upload', 'paste', 'rename', 'delete'])
   items[1].onClick()
   view = client.renderComponent(wrapped.type, wrapped.props)
   const input = all(view.value, is('input', 'data-file-write-name'))[0]
@@ -380,6 +382,82 @@ test('directory menu creates a child folder through the dedicated endpoint', asy
   assert.equal(client.requests[0][2].args.basename, 'child')
 })
 
+test('selected directory accepts multiple binary files from picker without overwriting', async () => {
+  const calls = []
+  const client = loadClient({ call: async (_route, endpoint, payload) => {
+    calls.push([endpoint, payload.args])
+    return { ok: true, value: endpoint === 'fileWrite/beginUpload' ? { token: `token-${calls.length}` } : {} }
+  } })
+  const wrapped = client.slots.get('conversation.input.dock')({ session: { id: 's1' } })
+  let view = client.renderComponent(wrapped.type, wrapped.props)
+  view.effects[1]()
+  const items = []
+  client.document.dispatchEvent({ type: 'dsh-file-tree-menu', detail: { event: directoryEvent('/work/docs'), items } })
+  let pickerClicked = false
+  // Simulate the ref assigned by React for the hidden multiple-file input.
+  const input = all(view.value, is('input', 'data-file-write-file-input'))[0]
+  assert.equal(input.props.multiple, true)
+  input.props.ref.current = { value: 'old', click() { pickerClicked = true } }
+  items.find(item => item.label === '添加文件…').onClick()
+  assert.equal(pickerClicked, true)
+  const fake = (name, text) => ({ name, size: text.length, slice(start, end) {
+    return { arrayBuffer: async () => new TextEncoder().encode(text.slice(start, end)).buffer }
+  } })
+  view = client.renderComponent(wrapped.type, wrapped.props)
+  input.props.onChange({ target: { files: [fake('a.bin', 'abc'), fake('b.bin', 'xy')] } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(calls.map(([endpoint]) => endpoint), [
+    'fileWrite/beginUpload', 'fileWrite/appendUpload', 'fileWrite/finishUpload',
+    'fileWrite/beginUpload', 'fileWrite/appendUpload', 'fileWrite/finishUpload',
+  ])
+  assert.equal(calls[0][1].directory, '/work/docs')
+  assert.equal(calls[0][1].basename, 'a.bin')
+  assert.equal(calls[3][1].basename, 'b.bin')
+  assert.equal(calls[1][1].chunkBase64, 'YWJj')
+})
+
+test('Cmd/Ctrl+V imports clipboard files only when targeting a tree directory', async () => {
+  const calls = []
+  const client = loadClient({ call: async (_route, endpoint, payload) => {
+    calls.push([endpoint, payload.args])
+    return { ok: true, value: endpoint === 'fileWrite/beginUpload' ? { token: 'paste-token' } : {} }
+  } })
+  const wrapped = client.slots.get('conversation.input.dock')({ session: { id: 's1' } })
+  const view = client.renderComponent(wrapped.type, wrapped.props)
+  view.effects[1]()
+  view.effects[2]()
+  let prevented = false
+  const file = { name: 'paste.bin', size: 1, slice: () => ({ arrayBuffer: async () => Uint8Array.of(9).buffer }) }
+  client.document.dispatchEvent({ type: 'paste', target: directoryEvent('/work/docs').target,
+    clipboardData: { files: [file] }, preventDefault() { prevented = true } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(prevented, true)
+  assert.equal(calls[0][0], 'fileWrite/beginUpload')
+  assert.equal(calls[0][1].directory, '/work/docs')
+  assert.equal(calls[1][1].chunkBase64, 'CQ==')
+})
+
+test('dropping files onto a folder imports them while a file row cannot receive drops', async () => {
+  const calls = []
+  const client = loadClient({ call: async (_route, endpoint) => {
+    calls.push(endpoint)
+    return { ok: true, value: endpoint === 'fileWrite/beginUpload' ? { token: 'drop-token' } : {} }
+  } })
+  const wrapped = client.slots.get('conversation.input.dock')({ session: { id: 's1' } })
+  const view = client.renderComponent(wrapped.type, wrapped.props)
+  view.effects[2]()
+  let prevented = false
+  const file = { name: 'empty.dat', size: 0 }
+  client.document.dispatchEvent({ type: 'drop', target: directoryEvent('/work/a.md', 'file').target,
+    dataTransfer: { files: [file] }, preventDefault() { prevented = true } })
+  assert.equal(prevented, false)
+  client.document.dispatchEvent({ type: 'drop', target: directoryEvent('/work/docs').target,
+    dataTransfer: { files: [file] }, preventDefault() { prevented = true } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(prevented, true)
+  assert.deepEqual(calls, ['fileWrite/beginUpload', 'fileWrite/finishUpload'])
+})
+
 test('ordinary file right-click offers move to Trash and confirms before requesting it', async () => {
   const client = loadClient({ call: async () => ({ ok: true, value: { absolutePath: '/work/a.md', kind: 'file' } }) })
   const wrapped = client.slots.get('conversation.input.dock')({ session: { id: 's1' } })
@@ -408,6 +486,28 @@ test('ordinary file right-click offers move to Trash and confirms before request
   assert.equal(client.requests[0][2].args.kind, 'file')
 })
 
+test('Windows Host labels the shared menu and confirmation as Recycle Bin', async () => {
+  const client = loadClient({ call: async (_route, endpoint) => ({ ok: true, value: endpoint === 'fileWrite/trashPlatform'
+    ? { platform: 'win32' } : { absolutePath: '/work/a.md', kind: 'file' } }) })
+  const wrapped = client.slots.get('conversation.input.dock')({ session: { id: 's1' } })
+  let view = client.renderComponent(wrapped.type, wrapped.props)
+  view.effects[3]() // Host platform, not navigator.platform (browser may run elsewhere).
+  await new Promise(resolve => setImmediate(resolve))
+  view = client.renderComponent(wrapped.type, wrapped.props)
+  view.effects[1]()
+  const items = []
+  client.document.dispatchEvent({ type: 'dsh-file-tree-menu', detail: {
+    event: directoryEvent('/work/a.md', 'file'), items,
+  } })
+  assert.deepEqual(items.map(item => item.label), ['重命名', '移到回收站'])
+  items[1].onClick()
+  const dialog = all(client.renderComponent(wrapped.type, wrapped.props).value, is('form'))
+    .find(node => node.props['aria-label'] === '确认移到回收站')
+  assert.ok(dialog)
+  assert.match(all(dialog, is('span'))[0].children[0], /系统回收站/)
+  assert.equal(all(dialog, is('button', 'data-file-write-delete'))[0].children[0], '移到回收站')
+})
+
 test('moving a directory to Trash keeps its contents recoverable', async () => {
   const client = loadClient()
   const wrapped = client.slots.get('conversation.input.dock')({ session: { id: 's1' } })
@@ -417,8 +517,8 @@ test('moving a directory to Trash keeps its contents recoverable', async () => {
   client.document.dispatchEvent({ type: 'dsh-file-tree-menu', detail: {
     event: directoryEvent('/work/sub'), items,
   } })
-  assert.deepEqual(items.map(item => item.label), ['新建文件', '新建文件夹', '重命名', '移到废纸篓'])
-  items[3].onClick()
+  assert.deepEqual(items.map(item => item.label), ['新建文件', '新建文件夹', '添加文件…', '粘贴', '重命名', '移到废纸篓'])
+  items[5].onClick()
   const dialog = all(client.renderComponent(wrapped.type, wrapped.props).value, is('form'))
     .find(node => node.props['aria-label'] === '确认移到废纸篓')
   assert.match(all(dialog, is('span'))[0].children[0], /目录及其中所有内容将一起移入系统废纸篓.*可从中恢复/)

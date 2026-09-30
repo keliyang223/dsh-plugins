@@ -159,6 +159,43 @@ test('tree context menu accepts a new-file contribution without losing add-to-ch
   assert.equal(calls.length, 0)
 })
 
+test('shared menu renders icons for file import and paste contributions', () => {
+  let menu = null
+  const effects = []
+  const listeners = new Map()
+  const { components } = loadPlugin({
+    CustomEvent: class CustomEvent { constructor(type, options) { this.type = type; this.detail = options.detail } },
+    dispatchDocumentEvent(event) {
+      if (event.type === 'dsh-file-tree-menu') {
+        event.detail.items.push({ label: '添加文件…', icon: 'upload', onClick() {} })
+        event.detail.items.push({ label: '粘贴', icon: 'paste', onClick() {} })
+      }
+    },
+    useState: () => [menu, (value) => { menu = value }],
+    useEffect: (effect) => { effects.push(effect) },
+    addDocumentListener: (name, fn) => { listeners.set(name, fn) },
+  })
+  const render = components.get('conversation.input.dock')
+  const inputActions = { captureInsertion: () => ({}), insertText() {} }
+  render({ inputActions })
+  effects[0]()
+  const row = {
+    closest: () => ({}),
+    getAttribute: (key) => key === 'data-files-entry' ? 'directory' : '/work/docs',
+    getBoundingClientRect: () => ({ left: 20, bottom: 50 }),
+  }
+  listeners.get('contextmenu')({
+    target: { closest: (selector) => selector.startsWith('li[') ? row : null },
+    clientX: 30, clientY: 50, preventDefault() {}, stopPropagation() {},
+  })
+  const items = render({ inputActions }).child.children
+  assert.deepEqual(items.slice(1).map((item) => item.children[1].children[0]), ['添加文件…', '粘贴'])
+  for (const item of items.slice(1)) {
+    assert.equal(item.children[0].type, 'svg')
+    assert.ok(item.children[0].children[0].props.d)
+  }
+})
+
 test('right-click ignores unrelated elements and unsafe file paths', () => {
   let menu = null
   const effects = []

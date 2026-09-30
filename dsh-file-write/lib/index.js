@@ -1,6 +1,8 @@
 import { TextDecoder } from 'node:util';
 import { posix, win32 } from 'node:path';
-import { mkdir, lstat, rename as renameEntry } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { lstat, mkdir, mkdtemp, open, realpath, rename as renameEntry, rm } from 'node:fs/promises';
 import trash from 'trash';
 import { TypertRemoteService, Remote, RemoteError } from '@deepseek-ai/dsh-typert-protocol';
 
@@ -8,6 +10,10 @@ import { TypertRemoteService, Remote, RemoteError } from '@deepseek-ai/dsh-typer
 // The lookup maps an untrusted sessionId on the wire to a *live* Session and its
 // current policy; the caller cannot supply either the workspace root or mode.
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
+const MAX_UPLOAD_CHUNK_BYTES = 1024 * 1024;
+const UPLOAD_TTL_MS = 15 * 60 * 1000;
+const BASE64_CHUNK = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const OWN_PACKAGE = 'dsh-file-write';
 const HAS_UNPAIRED_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 
@@ -88,6 +94,195 @@ export class FileWrite extends TypertRemoteService {
     const target = await this.ctx.fs.resolve(path, { cwd: this.ctx.fs.processPath(root), signal });
     if (!this.ctx.fs.contains(root, target)) fail('file-write/outside-workspace', 'path is outside session workspace', path);
     return target;
+  }
+
+  uploadStore() {
+    return this.uploads ??= new Map();
+  }
+
+  async uploadParent(fileWriteSession, directory, signal) {
+    if (typeof this.ctx.fs.processPathFromHostPath !== 'function') {
+      fail('file-write/unsupported-backend', 'binary upload requires a local filesystem backend');
+    }
+    const policy = this.policyOf(fileWriteSession);
+    const root = await this.workspaceOf(policy, signal);
+    const parent = await this.confinedPath(root, directory, signal);
+    if ((await this.ctx.fs.stat(parent, signal))?.type !== 'directory') {
+      fail('file-write/not-directory', 'parent directory must already exist', directory);
+    }
+    const rootPath = this.ctx.fs.processPath(root);
+    const paths = rootPath.startsWith('/') ? posix : win32;
+    const suppliedPath = paths.resolve(rootPath, directory);
+    const parentPath = this.ctx.fs.processPath(parent);
+    // Never write through an alias (including a symlink pointing back inside).
+    if (suppliedPath !== parentPath || await realpath(parentPath) !== parentPath) {
+      fail('file-write/stale-entry', 'parent must not contain symlinks', directory);
+    }
+    return { parentPath, paths };
+  }
+
+  async discardUpload(upload) {
+    clearTimeout(upload.timer);
+    this.uploadStore().delete(upload.token);
+    await rm(upload.tempDir, { recursive: true, force: true });
+  }
+
+  uploadFor(fileWriteSession, token) {
+    if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) {
+      fail('gateway/bad-request', 'token must be a valid upload token');
+    }
+    const upload = this.uploadStore().get(token);
+    if (!upload || upload.session !== fileWriteSession.session) {
+      fail('file-write/invalid-upload', 'upload token is invalid for this session');
+    }
+    if (upload.busy) fail('file-write/upload-busy', 'upload is already in use');
+    upload.busy = true;
+    return upload;
+  }
+
+  // wire: fileWrite.beginUpload({sessionId, directory, basename, size})
+  async beginUpload(fileWriteSession, directory, basename, size, signal) {
+    assertPath(directory, 'directory');
+    assertBasename(basename);
+    if (!Number.isSafeInteger(size) || size < 0) fail('gateway/bad-request', 'size must be a nonnegative safe integer');
+    if (size > MAX_UPLOAD_BYTES) fail('file-write/too-large', `upload exceeds ${MAX_UPLOAD_BYTES} bytes`);
+    const { parentPath, paths } = await this.uploadParent(fileWriteSession, directory, signal);
+    const destination = paths.join(parentPath, basename);
+    if (await this.ctx.fs.lstat(destination, undefined, signal) !== undefined) {
+      fail('file-write/already-exists', 'entry already exists', destination);
+    }
+    signal?.throwIfAborted();
+    const tempDir = await mkdtemp(paths.join(tmpdir(), 'dsh-file-write-upload-'));
+    const tempPath = paths.join(tempDir, 'data');
+    try {
+      const handle = await open(tempPath, 'wx', 0o600);
+      await handle.close();
+      const token = randomBytes(32).toString('hex');
+      const upload = { token, session: fileWriteSession.session, directory, basename, parentPath,
+        size, received: 0, tempDir, tempPath, busy: false, expiresAt: Date.now() + UPLOAD_TTL_MS };
+      const expire = () => {
+        if (upload.busy) {
+          upload.expired = true;
+          upload.timer = setTimeout(expire, 1000);
+          upload.timer.unref?.();
+          return;
+        }
+        void this.discardUpload(upload).catch(() => {});
+      };
+      upload.timer = setTimeout(expire, UPLOAD_TTL_MS);
+      upload.timer.unref?.();
+      this.uploadStore().set(token, upload);
+      return { token, maxChunkBytes: MAX_UPLOAD_CHUNK_BYTES, expiresAt: upload.expiresAt };
+    } catch (error) {
+      await rm(tempDir, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
+  // wire: fileWrite.appendUpload({sessionId, token, chunkBase64})
+  async appendUpload(fileWriteSession, token, chunkBase64, signal) {
+    const upload = this.uploadFor(fileWriteSession, token);
+    try {
+      if (Date.now() >= upload.expiresAt || upload.expired) fail('file-write/upload-expired', 'upload expired');
+      this.policyOf(fileWriteSession);
+      if (typeof chunkBase64 !== 'string' || !BASE64_CHUNK.test(chunkBase64)) {
+        fail('gateway/bad-request', 'chunkBase64 must be canonical base64');
+      }
+      if (chunkBase64.length > Math.ceil(MAX_UPLOAD_CHUNK_BYTES / 3) * 4) {
+        fail('file-write/too-large', 'upload chunk exceeds 1 MiB');
+      }
+      const chunk = Buffer.from(chunkBase64, 'base64');
+      if (chunk.length > MAX_UPLOAD_CHUNK_BYTES) fail('file-write/too-large', 'upload chunk exceeds 1 MiB');
+      if (chunk.toString('base64') !== chunkBase64) fail('gateway/bad-request', 'chunkBase64 must be canonical base64');
+      if (upload.received + chunk.length > upload.size) fail('file-write/too-large', 'upload exceeds declared size');
+      signal?.throwIfAborted();
+      const handle = await open(upload.tempPath, 'r+');
+      try {
+        let offset = 0;
+        while (offset < chunk.length) {
+          signal?.throwIfAborted();
+          const { bytesWritten } = await handle.write(chunk, offset, chunk.length - offset, upload.received + offset);
+          if (!bytesWritten) throw Error('upload write made no progress');
+          offset += bytesWritten;
+        }
+      } finally { await handle.close(); }
+      upload.received += chunk.length;
+      return { bytes: upload.received };
+    } catch (error) {
+      await this.discardUpload(upload);
+      throw error;
+    } finally { upload.busy = false; }
+  }
+
+  // wire: fileWrite.finishUpload({sessionId, token})
+  async finishUpload(fileWriteSession, token, signal) {
+    const upload = this.uploadFor(fileWriteSession, token);
+    try {
+      if (Date.now() >= upload.expiresAt || upload.expired) fail('file-write/upload-expired', 'upload expired');
+      if (upload.received !== upload.size) fail('file-write/incomplete-upload', 'upload does not match declared size');
+      const { parentPath, paths } = await this.uploadParent(fileWriteSession, upload.directory, signal);
+      if (parentPath !== upload.parentPath) fail('file-write/stale-entry', 'parent directory changed during upload');
+      const destination = paths.join(parentPath, upload.basename);
+      if (await this.ctx.fs.lstat(destination, undefined, signal) !== undefined) {
+        fail('file-write/already-exists', 'entry already exists', destination);
+      }
+      // Recheck canonical containment and parent immediately before the exclusive copy.
+      const fresh = await this.uploadParent(fileWriteSession, upload.directory, signal);
+      if (fresh.parentPath !== parentPath) fail('file-write/stale-entry', 'parent directory changed during upload');
+      signal?.throwIfAborted();
+      let output;
+      try { output = await open(destination, 'wx', 0o600); }
+      catch (error) {
+        if (isFsCode(error, 'EEXIST')) fail('file-write/already-exists', 'entry already exists', destination);
+        throw error;
+      }
+      try {
+        const source = await open(upload.tempPath, 'r');
+        try {
+          const block = Buffer.allocUnsafe(MAX_UPLOAD_CHUNK_BYTES);
+          let offset = 0;
+          while (offset < upload.size) {
+            signal?.throwIfAborted();
+            const { bytesRead } = await source.read(block, 0, Math.min(block.length, upload.size - offset), offset);
+            if (!bytesRead) throw Error('upload temporary file ended early');
+            let written = 0;
+            while (written < bytesRead) {
+              signal?.throwIfAborted();
+              const result = await output.write(block, written, bytesRead - written, offset + written);
+              if (!result.bytesWritten) throw Error('upload copy made no progress');
+              written += result.bytesWritten;
+            }
+            offset += bytesRead;
+          }
+        } finally { await source.close(); }
+        await output.close();
+      } catch (error) {
+        await output.close().catch(() => {});
+        await rm(destination, { force: true });
+        throw error;
+      }
+      return { absolutePath: destination, bytes: upload.received };
+    } finally {
+      await this.discardUpload(upload);
+      upload.busy = false;
+    }
+  }
+
+  // wire: fileWrite.cancelUpload({sessionId, token})
+  async cancelUpload(fileWriteSession, token, signal) {
+    const upload = this.uploadFor(fileWriteSession, token);
+    try {
+      signal?.throwIfAborted();
+      await this.discardUpload(upload);
+      return { cancelled: true };
+    } finally { upload.busy = false; }
+  }
+
+  // The trash action executes on the Host machine, which may differ from the browser OS.
+  // wire: fileWrite.trashPlatform({sessionId})
+  async trashPlatform(fileWriteSession) {
+    if (!fileWriteSession?.session?.header) fail('gateway/bad-request', 'session is unavailable');
+    return { platform: process.platform };
   }
 
   // wire: fileWrite.create({sessionId, directory, basename, text})
@@ -300,7 +495,7 @@ export class FileWrite extends TypertRemoteService {
 // Standard decorators without a build step; markers are attached to the
 // prototype on construction, as required by DSH's Typert SRC gateway.
 const remoteInitializers = [];
-for (const method of ['create', 'createDirectory', 'save', 'delete', 'rename']) {
+for (const method of ['create', 'createDirectory', 'save', 'delete', 'rename', 'beginUpload', 'appendUpload', 'finishUpload', 'cancelUpload', 'trashPlatform']) {
   Remote(FileWrite.prototype[method], {
     kind: 'method', name: method, static: false, private: false,
     addInitializer(initializer) { remoteInitializers.push(initializer); },

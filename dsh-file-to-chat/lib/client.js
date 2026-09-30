@@ -242,6 +242,8 @@ window.__ModuleLoader__.load({
       createDirectory: 'M3 7V5a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v2M3 7h18l-1.5 12a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2L3 7Zm9 4v6m-3-3h6',
       delete: 'M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v6m4-6v6',
       rename: 'M4 20h4l11-11-4-4L4 16v4Zm9-13 4 4M4 20h16',
+      upload: 'M12 16V3m-4 4 4-4 4 4M4 17v3h16v-3',
+      paste: 'M8 4h2a2 2 0 0 1 4 0h2v3H8V4ZM6 7H5v14h14V7h-1',
     }
     function menuIcon(kind) {
       const graphic = menuIcons[kind]
