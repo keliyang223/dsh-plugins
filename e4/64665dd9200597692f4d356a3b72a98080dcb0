@@ -1,0 +1,28 @@
+dsh-file-to-chat/lib/client.js
+  h_6ee620acf9166c 245-246
+dsh-file-to-chat/test/client.test.mjs
+  h_6ee620acf9166c 162-198
+dsh-file-write/README.en.md
+  h_6ee620acf9166c 10,12,32
+dsh-file-write/README.md
+  h_6ee620acf9166c 10,12-13,32
+dsh-file-write/lib/client.js
+  h_6ee620acf9166c 41-42,241-243,249-252,255-333,360-361,365,375,383-437,520,527-528,541-546,552,588-597,601,604,606,612,621-624,645-656
+dsh-file-write/lib/index.js
+  h_6ee620acf9166c 3-5,13-16,99-287,498
+dsh-file-write/test/client.test.mjs
+  h_6ee620acf9166c 58-60,316-317,385-460,489-510,520-521
+dsh-file-write/test/host.test.mjs
+  h_6ee620acf9166c 4,100,110-119,381-506
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e464665dd9200597692f4d356a3b72a98080dcb0",
+  "prompts": {},
+  "humans": {
+    "h_6ee620acf9166c": {
+      "author": "keliyang <keliyang@zuoyebang.com>"
+    }
+  }
+}
